@@ -1940,13 +1940,13 @@ namespace ContentStoreTest.Distributed.Sessions
             };
         }
 
-        private void ConfigureRocksDbContentLocationBasedTest(bool configureInMemoryEventStore = false, Action<int, AbsolutePath, RedisContentLocationStoreConfiguration> configurationPostProcessor = null, bool configurePin = true)
+        private void ConfigureRocksDbContentLocationBasedTest(bool configureInMemoryEventStore = false, Action<int, AbsolutePath, RedisContentLocationStoreConfiguration> configurationPostProcessor = null, bool configurePin = true, AbsolutePath overrideContentLocationStoreDirectory = null)
         {
             var eventStoreConfiguration = configureInMemoryEventStore ? new MemoryContentLocationEventStoreConfiguration() : null;
             CreateContentLocationStoreConfiguration = (testRootDirectory, index) =>
             {
                 var result = CreateRedisContentLocationStoreConfiguration(
-                    testRootDirectory,
+                    overrideContentLocationStoreDirectory ?? testRootDirectory,
                     eventStoreConfiguration);
 
                 configurationPostProcessor?.Invoke(index, testRootDirectory, result);
@@ -2045,5 +2045,75 @@ namespace ContentStoreTest.Distributed.Sessions
             Output.WriteLine("The test is configured correctly.");
             return true;
         }
+
+        [Theory]
+        [InlineData(true, 100, 3000, 100)]
+        [InlineData(false, 100, 3000, 100)]
+        public async Task StressTestLocalDatabase(bool useIncrementalCheckpointing, int numberOfMachines, int addsPerMachine, int maximumBatchSize)
+        {
+            // The directory should have a "rocksdb" folder inside with the appropriate structure
+            var contentLocationStoreDirectory = new AbsolutePath(@"D:\TestLocationStore");
+
+            var centralStoreConfiguration = new LocalDiskCentralStoreConfiguration(TestRootDirectoryPath / "centralstore", Guid.NewGuid().ToString());
+            var masterLeaseExpiryTime = TimeSpan.FromMinutes(3);
+
+            MemoryContentLocationEventStoreConfiguration memoryContentLocationEventStore = null;
+            ConfigureRocksDbContentLocationBasedTest(
+                configureInMemoryEventStore: true,
+                (index, testRootDirectory, config) =>
+                {
+                    config.Checkpoint = new CheckpointConfiguration(testRootDirectory)
+                    {
+                        /* Set role to null to automatically choose role using master election */
+                        Role = null,
+                        UseIncrementalCheckpointing = useIncrementalCheckpointing,
+                        CreateCheckpointInterval = TimeSpan.FromMinutes(1),
+                        RestoreCheckpointInterval = TimeSpan.FromMinutes(1),
+                        HeartbeatInterval = Timeout.InfiniteTimeSpan,
+                        MasterLeaseExpiryTime = masterLeaseExpiryTime
+                    };
+                    config.CentralStore = centralStoreConfiguration;
+                    memoryContentLocationEventStore = (MemoryContentLocationEventStoreConfiguration)config.EventStore;
+                },
+                overrideContentLocationStoreDirectory: contentLocationStoreDirectory);
+
+            await RunTestAsync(
+                new Context(Logger),
+                2,
+                async context =>
+                {
+                    var sessions = context.Sessions;
+
+                    var randomSeed = Environment.TickCount;
+                    var machineIds = Enumerable.Range(0, numberOfMachines).Select(machineIdIndex => MachineId.FromIndex(machineIdIndex));
+                    Parallel.ForEach(machineIds, machineId =>
+                    {
+                        var eventHub = memoryContentLocationEventStore.Hub;
+
+                        // Enforce sequentially consistent increments, so each thread gets a unique seed, albeit contiguous
+                        var rng = new Random(Interlocked.Increment(ref randomSeed));
+
+                        var addedContent = new List<ContentHash>();
+                        foreach (var _ in Enumerable.Range(0, addsPerMachine))
+                        {
+                            var hash = ContentHash.Random();
+                            addedContent.Add(hash);
+                        }
+
+                        // Add the hashes in random batches
+                        for (var pendingHashes = addedContent.Count; pendingHashes > 0; )
+                        {
+                            var batchSize = rng.Next(1, Math.Min(maximumBatchSize, pendingHashes));
+                            var batch = addedContent.GetRange(addedContent.Count - pendingHashes, batchSize).Select(hash => new ShortHashWithSize(new ShortHash(hash), 200)).ToList();
+                            eventHub.Send(new AddContentLocationEventData(machineId, batch));
+
+                            pendingHashes -= batchSize;
+                        }
+                    });
+
+                    await Task.Delay(10);
+                });
+        }
+
     }
 }
