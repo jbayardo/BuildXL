@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -2046,11 +2047,14 @@ namespace ContentStoreTest.Distributed.Sessions
             return true;
         }
 
-        [Theory]
-        [InlineData(true, 3000, 2000000, 100)]
-        [InlineData(false, 3000, 2000000, 100)]
-        public async Task StressTestLocalDatabase(bool useIncrementalCheckpointing, int numberOfMachines, int addsPerMachine, int maximumBatchSize)
+        [Fact]
+        public async Task StressTestLocalDatabase()
         {
+            bool useIncrementalCheckpointing = true;
+            int numberOfMachines = 100;
+            int addsPerMachine = 25000;
+            int maximumBatchSize = 1000;
+            int warmupBatches = 10000;
             // The directory should have a "rocksdb" folder inside with the appropriate structure
             //var contentLocationStoreDirectory = new AbsolutePath(@"D:\TestLocationStore");
 
@@ -2075,7 +2079,31 @@ namespace ContentStoreTest.Distributed.Sessions
                     config.CentralStore = centralStoreConfiguration;
                     memoryContentLocationEventStore = (MemoryContentLocationEventStoreConfiguration)config.EventStore;
                 });
-                // , overrideContentLocationStoreDirectory: contentLocationStoreDirectory);
+            // , overrideContentLocationStoreDirectory: contentLocationStoreDirectory);
+
+            // Generate the data
+            var randomSeed = Environment.TickCount;
+            var events = new List<List<ContentLocationEventData>>(numberOfMachines);
+            events.AddRange(Enumerable.Range(0, numberOfMachines).Select(x => (List<ContentLocationEventData>)null));
+
+            Output.WriteLine("Data gen");
+            Parallel.ForEach(Enumerable.Range(0, numberOfMachines), machineId => {
+                var machineIdObject = new MachineId(machineId);
+                var rng = new Random(Interlocked.Increment(ref randomSeed));
+
+                var addedContent = Enumerable.Range(0, addsPerMachine).Select(_ => ContentHash.Random()).ToList();
+
+                var machineEvents = new List<ContentLocationEventData>();
+                for (var pendingHashes = addedContent.Count; pendingHashes > 0;)
+                {
+                    // Add the hashes in random batches
+                    var batchSize = rng.Next(1, Math.Min(maximumBatchSize, pendingHashes));
+                    var batch = addedContent.GetRange(addedContent.Count - pendingHashes, batchSize).Select(hash => new ShortHashWithSize(new ShortHash(hash), 200)).ToList();
+                    machineEvents.Add(new AddContentLocationEventData(machineIdObject, batch));
+                    pendingHashes -= batchSize;
+                }
+                events[machineId] = machineEvents;
+            });
 
             await RunTestAsync(
                 new Context(Logger),
@@ -2084,35 +2112,39 @@ namespace ContentStoreTest.Distributed.Sessions
                 {
                     var sessions = context.Sessions;
 
-                    var randomSeed = Environment.TickCount;
-                    var machineIds = Enumerable.Range(0, numberOfMachines).Select(machineIdIndex => MachineId.FromIndex(machineIdIndex));
+                    Output.WriteLine("Warmup");
+                    // Warm up by removing a bunch of non-existent entries. Since these don't exist, no changes should happen
+                    var warmupEventHub = memoryContentLocationEventStore.Hub;
+                    var warmupRng = new Random(Environment.TickCount);
+                    foreach (var _ in Enumerable.Range(0, warmupBatches))
+                    {
+                        var machineId = new MachineId(warmupRng.Next());
+                        var batch = Enumerable.Range(0, maximumBatchSize).Select(x => new ShortHash(ContentHash.Random())).ToList();
+                        warmupEventHub.Send(new RemoveContentLocationEventData(machineId, batch));
+                    }
 
-                    foreach (var machineId in machineIds)
+                    Output.WriteLine("Benchmark starting in 5s");
+                    await Task.Delay(5000);
+
+                    // Benchmark
+                    var stopWatch = new Stopwatch();
+                    stopWatch.Start();
+                    foreach (var machineId in Enumerable.Range(0, numberOfMachines))
                     {
                         var eventHub = memoryContentLocationEventStore.Hub;
 
-                        // Enforce sequentially consistent increments, so each thread gets a unique seed, albeit contiguous
-                        var rng = new Random(Interlocked.Increment(ref randomSeed));
-
-                        var addedContent = new List<ContentHash>();
-                        foreach (var _ in Enumerable.Range(0, addsPerMachine))
+                        foreach (var ev in events[machineId])
                         {
-                            var hash = ContentHash.Random();
-                            addedContent.Add(hash);
-                        }
-
-                        // Add the hashes in random batches
-                        for (var pendingHashes = addedContent.Count; pendingHashes > 0; )
-                        {
-                            var batchSize = rng.Next(1, Math.Min(maximumBatchSize, pendingHashes));
-                            var batch = addedContent.GetRange(addedContent.Count - pendingHashes, batchSize).Select(hash => new ShortHashWithSize(new ShortHash(hash), 200)).ToList();
-                            eventHub.Send(new AddContentLocationEventData(machineId, batch));
-
-                            pendingHashes -= batchSize;
+                            eventHub.Send(ev);
                         }
                     }
+                    stopWatch.Stop();
 
-                    await Task.Delay(10);
+                    var ts = stopWatch.Elapsed;
+                    var elapsedTime = string.Format("{0:00}:{1:00}:{2:00}.{3:00}",
+                        ts.Hours, ts.Minutes, ts.Seconds,
+                        ts.Milliseconds / 10);
+                    Output.WriteLine("Total time: " + ts);
                 });
         }
 
