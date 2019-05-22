@@ -2047,12 +2047,12 @@ namespace ContentStoreTest.Distributed.Sessions
         }
 
         [Theory]
-        [InlineData(true, 100, 3000, 100)]
-        [InlineData(false, 100, 3000, 100)]
+        [InlineData(true, 3000, 2000000, 100)]
+        [InlineData(false, 3000, 2000000, 100)]
         public async Task StressTestLocalDatabase(bool useIncrementalCheckpointing, int numberOfMachines, int addsPerMachine, int maximumBatchSize)
         {
             // The directory should have a "rocksdb" folder inside with the appropriate structure
-            var contentLocationStoreDirectory = new AbsolutePath(@"D:\TestLocationStore");
+            //var contentLocationStoreDirectory = new AbsolutePath(@"D:\TestLocationStore");
 
             var centralStoreConfiguration = new LocalDiskCentralStoreConfiguration(TestRootDirectoryPath / "centralstore", Guid.NewGuid().ToString());
             var masterLeaseExpiryTime = TimeSpan.FromMinutes(3);
@@ -2074,8 +2074,8 @@ namespace ContentStoreTest.Distributed.Sessions
                     };
                     config.CentralStore = centralStoreConfiguration;
                     memoryContentLocationEventStore = (MemoryContentLocationEventStoreConfiguration)config.EventStore;
-                },
-                overrideContentLocationStoreDirectory: contentLocationStoreDirectory);
+                });
+                // , overrideContentLocationStoreDirectory: contentLocationStoreDirectory);
 
             await RunTestAsync(
                 new Context(Logger),
@@ -2086,7 +2086,8 @@ namespace ContentStoreTest.Distributed.Sessions
 
                     var randomSeed = Environment.TickCount;
                     var machineIds = Enumerable.Range(0, numberOfMachines).Select(machineIdIndex => MachineId.FromIndex(machineIdIndex));
-                    Parallel.ForEach(machineIds, machineId =>
+
+                    foreach (var machineId in machineIds)
                     {
                         var eventHub = memoryContentLocationEventStore.Hub;
 
@@ -2109,7 +2110,7 @@ namespace ContentStoreTest.Distributed.Sessions
 
                             pendingHashes -= batchSize;
                         }
-                    });
+                    }
 
                     await Task.Delay(10);
                 });
