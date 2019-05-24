@@ -173,7 +173,7 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                     .SetIndexType(BlockBasedTableIndexType.HashSearch)
                     .SetWholeKeyFiltering(false);
 
-                m_defaults.ColumnFamilyOptions = new ColumnFamilyOptions();
+                m_defaults.ColumnFamilyOptions = new ColumnFamilyOptions()
                     .SetBlockBasedTableFactory(bbto)
                     .SetPrefixExtractor(SliceTransform.CreateNoOp());
 
