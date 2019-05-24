@@ -152,7 +152,14 @@ namespace BuildXL.Engine.Cache.KeyValueStores
 
                 m_defaults.DbOptions = new DbOptions()
                     .SetCreateIfMissing(true)
-                    .SetCreateMissingColumnFamilies(true);
+                    .SetCreateMissingColumnFamilies(true)
+                    .SetAdviseRandomOnOpen(true);
+
+                //.SetAllowMmapReads(true)
+                //.SetAllowMmapWrites(true)
+
+                // The following option disables caching, and that totally screws performance for a mixed r/w workload
+                // .SetUseDirectReads(true)
 
                 // Disable the write ahead log to reduce disk IO. The write ahead log
                 // is used to recover the store on crashes, so a crash will lose some writes.
@@ -160,7 +167,15 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                 // is reached and then they will be flushed to storage files.
                 m_defaults.WriteOptions = new WriteOptions().DisableWal(1);
 
+
+                var bbto = new BlockBasedTableOptions()
+                    .SetFilterPolicy(BloomFilterPolicy.Create(10, false))
+                    .SetIndexType(BlockBasedTableIndexType.HashSearch)
+                    .SetWholeKeyFiltering(false);
+
                 m_defaults.ColumnFamilyOptions = new ColumnFamilyOptions();
+                    .SetBlockBasedTableFactory(bbto)
+                    .SetPrefixExtractor(SliceTransform.CreateNoOp());
 
                 m_columns = new Dictionary<string, ColumnFamilyInfo>();
 

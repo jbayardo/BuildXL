@@ -138,6 +138,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     OnEvent(eventData);
                 }
             }
+
+            public void LockFreeSend(ContentLocationEventData eventData)
+            {
+                OnEvent(eventData);
+            }
         }
     }
 }
