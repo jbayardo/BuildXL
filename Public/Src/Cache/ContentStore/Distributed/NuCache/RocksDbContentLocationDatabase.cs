@@ -420,7 +420,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
-        protected override bool TryGetEntryCore(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
+        protected override bool TryGetEntryCoreFromStorage(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
         {
             entry = _keyValueStore.Use(
                     (store, state) => TryGetEntryCoreHelper(state.hash, store, state.db),
@@ -442,7 +442,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
-        protected override void Store(OperationContext context, ShortHash hash, ContentLocationEntry entry)
+        protected override void PersistStore(OperationContext context, ShortHash hash, ContentLocationEntry entry)
         {
             SaveToDb(context, hash, entry);
         }
@@ -463,7 +463,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
-        protected override void Delete(OperationContext context, ShortHash hash)
+        protected override void PersistDelete(OperationContext context, ShortHash hash)
         {
             DeleteFromDb(context, hash);
         }

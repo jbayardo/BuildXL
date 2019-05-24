@@ -27,6 +27,26 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// Indicates whether reading/writing cluster state from local db is supported.
         /// </summary>
         public bool StoreClusterState { get; set; } = true;
+
+        /// <summary>
+        /// When activated, the requests effectively sent to the database will be initally done in memory and later on
+        /// flushed to the underlying store.
+        /// </summary>
+        public bool NagleStoreRequests { get; set; } = true;
+
+        /// <summary>
+        /// The maximum number of updates that we are willing to perform in memory before flushing.
+        /// 
+        /// Only effective when <see cref="NagleStoreRequests"/> is activated.
+        /// </summary>
+        public int NagleMaximumNumberOfUpdates { get; set; } = 10000;
+
+        /// <summary>
+        /// The maximum amount of time that can pass without a flush.
+        /// 
+        /// Only effective when <see cref="NagleStoreRequests"/> is activated.
+        /// </summary>
+        public TimeSpan NagleFlushingInterval { get; set; } = TimeSpan.FromMinutes(0.5);
     }
 
     /// <summary>

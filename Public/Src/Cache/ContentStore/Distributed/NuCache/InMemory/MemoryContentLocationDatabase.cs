@@ -35,21 +35,21 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache.InMemory
         }
 
         /// <inheritdoc />
-        protected override bool TryGetEntryCore(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
+        protected override bool TryGetEntryCoreFromStorage(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
         {
             entry = GetContentLocationEntry(hash);
             return !entry.IsMissing;
         }
 
         /// <inheritdoc />
-        protected override void Store(OperationContext context, ShortHash hash, ContentLocationEntry entry)
+        protected override void PersistStore(OperationContext context, ShortHash hash, ContentLocationEntry entry)
         {
             // consider merging the values. Right now we always reconstruct the entry.
             _map.AddOrUpdate(hash, key => entry, (key, old) => entry);
         }
 
         /// <inheritdoc />
-        protected override void Delete(OperationContext context, ShortHash hash)
+        protected override void PersistDelete(OperationContext context, ShortHash hash)
         {
             _map.TryRemove(hash, out _);
         }
