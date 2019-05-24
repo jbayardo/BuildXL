@@ -153,7 +153,16 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                 m_defaults.DbOptions = new DbOptions()
                     .SetCreateIfMissing(true)
                     .SetCreateMissingColumnFamilies(true)
-                    .SetAdviseRandomOnOpen(true);
+                    // Since we are caching hashes, our usage is mostly random, and we should let the OS know that
+                    .SetAdviseRandomOnOpen(true)
+                    // The background compaction threads run in low priority, so they should not hamper the rest of
+                    // the system. The number of cores in the system is what we want here according to official docs,
+                    // and we are setting this to the number of logical processors, which may be higher.
+                    .SetMaxBackgroundCompactions(Environment.ProcessorCount)
+                    .SetMaxBackgroundFlushes(1)
+                    .IncreaseParallelism(Environment.ProcessorCount / 2)
+                    // Ensure we have performance statistics for profiling
+                    .EnableStatistics();
 
                 //.SetAllowMmapReads(true)
                 //.SetAllowMmapWrites(true)
@@ -161,11 +170,18 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                 // The following option disables caching, and that totally screws performance for a mixed r/w workload
                 // .SetUseDirectReads(true)
 
-                // Disable the write ahead log to reduce disk IO. The write ahead log
-                // is used to recover the store on crashes, so a crash will lose some writes.
-                // Writes will be made in-memory only until the write buffer size
-                // is reached and then they will be flushed to storage files.
-                m_defaults.WriteOptions = new WriteOptions().DisableWal(1);
+                m_defaults.WriteOptions = new WriteOptions()
+                    // Disable the write ahead log to reduce disk IO. The write ahead log
+                    // is used to recover the store on crashes, so a crash will lose some writes.
+                    // Writes will be made in-memory only until the write buffer size
+                    // is reached and then they will be flushed to storage files.
+                    .DisableWal(1)
+                    // This option is off by default, but just making sure that the C# wrapper 
+                    // doesn't change anything. The idea is that the DB won't wait for fsync to
+                    // return before acknowledging the write as successful. This affects 
+                    // correctness, because a write may be ACKd before it is actually on disk,
+                    // but it is much faster.
+                    .SetSync(false);
 
 
                 var bbto = new BlockBasedTableOptions()
