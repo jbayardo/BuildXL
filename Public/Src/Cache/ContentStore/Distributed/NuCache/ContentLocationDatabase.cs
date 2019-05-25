@@ -53,12 +53,20 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// </summary>
         private readonly object[] _locks = Enumerable.Range(0, ushort.MaxValue + 1).Select(s => new object()).ToArray();
 
-        private ConcurrentDictionary<ShortHash, ContentLocationEntry> _cache = null;
+        private ConcurrentDictionary<ShortHash, ContentLocationEntry> _cache = new ConcurrentDictionary<ShortHash, ContentLocationEntry>();
 
         /// <summary>
-        /// This counter will drift depending on flush operations and when they are performed; its purpose is to keep an approximate count.
+        /// This counter is not exact, but provides an approximate count. It may be thwarted by flushes and cache
+        /// activate/deactivate events. Its only purpose is to roughly help ensure flushes are more-or-less frequent.
         /// </summary>
-        private int _cacheUpdates = 0;
+        private int _updatesSinceLastCacheFlush = 0;
+
+        /// <summary>
+        /// This lock is not a RW lock in the sense that the cache may only have one writer at the time, but in the
+        /// sense that some operations over the cache reference and underlying store may only have one writer at the
+        /// time.
+        /// </summary>
+        private readonly ReaderWriterLockSlim _cacheLock = new ReaderWriterLockSlim();
 
         /// <nodoc />
         protected ContentLocationDatabase(IClock clock, ContentLocationDatabaseConfiguration configuration, Func<IReadOnlyList<MachineId>> getInactiveMachines)
@@ -70,11 +78,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             Clock = clock;
             _configuration = configuration;
             _getInactiveMachines = getInactiveMachines;
-
-            if (configuration.NagleStoreRequests)
-            {
-                _cache = new ConcurrentDictionary<ShortHash, ContentLocationEntry>();
-            }
         }
 
         /// <summary>
@@ -129,6 +132,20 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 _isGarbageCollectionEnabled = shouldDoGc;
                 var nextGcTimeSpan = _isGarbageCollectionEnabled ? _configuration.LocalDatabaseGarbageCollectionInterval : Timeout.InfiniteTimeSpan;
                 _gcTimer?.Change(nextGcTimeSpan, Timeout.InfiniteTimeSpan);
+            }
+        }
+
+        public void ConfigureDatabaseCache(OperationContext context, bool shouldUseCache)
+        {
+            _cacheLock.EnterWriteLock();
+
+            try
+            {
+                _configuration.NagleStoreRequests = shouldUseCache;
+                FlushCacheToStorage(context);
+            } finally
+            {
+                _cacheLock.ExitWriteLock();
             }
         }
 
@@ -189,6 +206,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         /// <summary>
         /// Gets a sequence of keys.
+        ///
+        /// WARNING: when the cache is in effect, this list may not be coherent with the actual keys being managed by the database, as it will come from the
+        /// information on disk and not the data in memory.
         /// </summary>
         public abstract IEnumerable<ShortHash> EnumerateSortedKeys(CancellationToken token);
 
@@ -199,6 +219,8 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         /// <summary>
         /// Gets a sequence of keys and values sorted by keys.
+        ///
+        /// WARNING: this should never be used when the cache is in effect, as there may be discrepancies between the returned value and the actual values.
         /// </summary>
         public abstract IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeys(
             CancellationToken token,
@@ -373,36 +395,38 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         protected bool TryGetEntryCore(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
         {
-            if (!_configuration.NagleStoreRequests)
-            {
-                return TryGetEntryCoreFromStorage(context, hash, out entry);
-            }
+            _cacheLock.EnterReadLock();
 
-            BeginCacheOperation();
-
-            bool fetchSuccessful;
-            if (_cache.TryGetValue(hash, out entry))
+            try
             {
-                fetchSuccessful = true;
-            } else
-            {
-                if (TryGetEntryCoreFromStorage(context, hash, out var storedEntry))
+                if (!_configuration.NagleStoreRequests)
                 {
-                    // Some other thread may have written the value in between the cache check and the add, so we need
-                    // to be careful here. The working assumption is that if an entry is in the cache, then it is the
-                    // latest version, so we won't overwrite it.
-                    entry = _cache.GetOrAdd(hash, storedEntry);
-                    fetchSuccessful = true;
+                    return TryGetEntryCoreFromStorage(context, hash, out entry);
+                }
+
+                if (_cache.TryGetValue(hash, out entry))
+                {
+                    return true;
                 }
                 else
                 {
-                    fetchSuccessful = false;
+                    if (TryGetEntryCoreFromStorage(context, hash, out var storedEntry))
+                    {
+                        // Some other thread may have written the value in between the cache check and the add, so we need
+                        // to be careful here. The working assumption is that if an entry is in the cache, then it is the
+                        // latest version, so we won't overwrite it.
+                        entry = _cache.GetOrAdd(hash, storedEntry);
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
                 }
+            } finally
+            {
+                _cacheLock.ExitReadLock();
             }
-
-            FinishCacheOperation();
-
-            return fetchSuccessful;
         }
 
         /// <nodoc />
@@ -411,18 +435,42 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         protected void Store(OperationContext context, ShortHash hash, ContentLocationEntry entry)
         {
-            if (!_configuration.NagleStoreRequests)
+            _cacheLock.EnterReadLock();
+
+            int updates = -1;
+            try
             {
-                PersistStore(context, hash, entry);
-                return;
+                if (!_configuration.NagleStoreRequests)
+                {
+                    PersistStore(context, hash, entry);
+                    return;
+                }
+
+                // The assumption here is that the cache is always the latest version, so we fire and forget
+                _cache[hash] = entry;
+            } finally
+            {
+                // Ensure the increment is done as part of the current operation. When the cache is disabled, this will overflow.
+                updates = Interlocked.Increment(ref _updatesSinceLastCacheFlush);
+                _cacheLock.ExitReadLock();
             }
 
-            BeginCacheOperation();
+            // We can only be here if we previously sensed that the cache is active, otherwise we would have returned
+            if (updates == _configuration.NagleMaximumNumberOfUpdates)
+            {
+                // The fact that this is == is important to ensure it can only be triggered once by this condition
+                _cacheLock.EnterWriteLock();
 
-            // The assumption here is that the cache is always the latest version, so we fire and forget
-            _cache[hash] = entry;
-
-            FinishCacheOperationAndPerhapsFlush(context);
+                try
+                {
+                    // Notice that it is possible that the cache has actually been deactivated by the time we are here. In such a case,
+                    // it is guaranteed to have been flushed, so it is just useless work.
+                    FlushCacheToStorage(context);
+                } finally
+                {
+                    _cacheLock.ExitWriteLock();
+                }
+            }
         }
 
         /// <nodoc />
@@ -431,63 +479,40 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         protected void Delete(OperationContext context, ShortHash hash)
         {
-            if (!_configuration.NagleStoreRequests)
+            _cacheLock.EnterReadLock();
+
+            try
             {
+                if (!_configuration.NagleStoreRequests)
+                {
+                    PersistDelete(context, hash);
+                    return;
+                }
+
+                // Order is important here, if things are done in reverse, inconsistency ensues (concurrent add and delete)
+                _cache.TryRemove(hash, out var value);
                 PersistDelete(context, hash);
-                return;
-            }
-
-            BeginCacheOperation();
-
-            // Order is important here, if things are done in reverse, inconsistency ensues (concurrent add and delete)
-            _cache.TryRemove(hash, out var value);
-            PersistDelete(context, hash);
-
-            FinishCacheOperationAndPerhapsFlush(context);
-        }
-
-        private void BeginCacheOperation()
-        {
-            _cacheReferenceLock.EnterReadLock();
-        }
-
-        private void FinishCacheOperation()
-        {
-            _cacheReferenceLock.ExitReadLock();
-        }
-
-        /// <nodoc />
-        private void FinishCacheOperationAndPerhapsFlush(OperationContext context)
-        {
-            FinishCacheOperation();
-
-            if (Interlocked.Increment(ref _cacheUpdates) != _configuration.NagleMaximumNumberOfUpdates)
+            } finally
             {
-                // The fact that this is != is important to ensure it only happens once
-                return;
+                _cacheLock.ExitReadLock();
             }
-
-            ForceFlushCacheToStorage(context);
         }
 
-        private readonly ReaderWriterLockSlim _cacheReferenceLock = new ReaderWriterLockSlim();
-
-        /// <nodoc />
-        private void ForceFlushCacheToStorage(OperationContext context)
+        /// <summary>
+        /// Assumes that a write lock over <see cref="_cacheLock"/> is held by caller. It is also "idempotent", running it after itself won't change the outcome,
+        /// so if the cache is empty already nothing happens once it is called again.
+        /// </summary>
+        private void FlushCacheToStorage(OperationContext context)
         {
-            _cacheReferenceLock.EnterWriteLock();
-
             // Clears up the cache, ensuring that all working information has to be fetched from storage again. Not ideal,
             // but simple semantics work for now.
             var flushableCache = Interlocked.Exchange(ref _cache, new ConcurrentDictionary<ShortHash, ContentLocationEntry>());
-            Interlocked.Add(ref _cacheUpdates, -_cacheUpdates);
+            Interlocked.Exchange(ref _updatesSinceLastCacheFlush, 0);
 
             foreach (var kv in flushableCache)
             {
                 PersistStore(context, kv.Key, kv.Value);
             }
-            
-            _cacheReferenceLock.ExitWriteLock();
         }
 
         private ContentLocationEntry SetMachineExistenceAndUpdateDatabase(OperationContext context, ShortHash hash, MachineId? machine, bool existsOnMachine, long size, UnixTime? lastAccessTime, bool reconciling)

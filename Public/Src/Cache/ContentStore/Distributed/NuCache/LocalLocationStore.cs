@@ -395,6 +395,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
                             // Local database should be immutable on workers and only master is responsible for collecting stale records
                             Database.ConfigureGarbageCollection(shouldDoGc: newRole == Role.Master);
+                            Database.ConfigureDatabaseCache(context, shouldUseCache: newRole == Role.Master);
                     }
 
                         // Always restore when switching roles
