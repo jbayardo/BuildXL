@@ -57,7 +57,8 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         /// <summary>
         /// This counter is not exact, but provides an approximate count. It may be thwarted by flushes and cache
-        /// activate/deactivate events. Its only purpose is to roughly help ensure flushes are more-or-less frequent.
+        /// activate/deactivate events. Its only purpose is to roughly help ensure flushes are more frequent as
+        /// more operations are performed.
         /// </summary>
         private int _updatesSinceLastCacheFlush = 0;
 
@@ -67,6 +68,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// time.
         /// </summary>
         private readonly ReaderWriterLockSlim _cacheLock = new ReaderWriterLockSlim();
+
+        /// <summary>
+        /// Controls cache flushing due to timeout.
+        /// </summary>
+        private Timer _cacheFlushTimer;
 
         /// <nodoc />
         protected ContentLocationDatabase(IClock clock, ContentLocationDatabaseConfiguration configuration, Func<IReadOnlyList<MachineId>> getInactiveMachines)
@@ -158,6 +164,15 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     _ => GarbageCollect(context),
                     null,
                     _isGarbageCollectionEnabled ? _configuration.LocalDatabaseGarbageCollectionInterval : Timeout.InfiniteTimeSpan,
+                    Timeout.InfiniteTimeSpan);
+            }
+
+            if (_configuration.NagleFlushingInterval != Timeout.InfiniteTimeSpan)
+            {
+                _cacheFlushTimer = new Timer(
+                    _ => PeriodicFlushCacheToStorage(context),
+                    null,
+                    _configuration.NagleFlushingInterval,
                     Timeout.InfiniteTimeSpan);
             }
 
@@ -406,7 +421,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
                 if (_cache.TryGetValue(hash, out entry))
                 {
-                    return true;
+                    // The entry could be a tombstone, so we need to make sure the user knows content has actually been
+                    // deleted.
+                    return entry != null;
                 }
                 else
                 {
@@ -459,17 +476,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             if (updates == _configuration.NagleMaximumNumberOfUpdates)
             {
                 // The fact that this is == is important to ensure it can only be triggered once by this condition
-                _cacheLock.EnterWriteLock();
-
-                try
-                {
-                    // Notice that it is possible that the cache has actually been deactivated by the time we are here. In such a case,
-                    // it is guaranteed to have been flushed, so it is just useless work.
-                    FlushCacheToStorage(context);
-                } finally
-                {
-                    _cacheLock.ExitWriteLock();
-                }
+                PeriodicFlushCacheToStorage(context);
             }
         }
 
@@ -489,29 +496,52 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     return;
                 }
 
-                // Order is important here, if things are done in reverse, inconsistency ensues (concurrent add and delete)
-                _cache.TryRemove(hash, out var value);
-                PersistDelete(context, hash);
+                // Generate a tombstone for the hash
+                _cache[hash] = null;
             } finally
             {
                 _cacheLock.ExitReadLock();
             }
         }
 
+        private void PeriodicFlushCacheToStorage(OperationContext context)
+        {
+            _cacheLock.EnterWriteLock();
+
+            try
+            {
+                if (!_configuration.NagleStoreRequests)
+                {
+                    return;
+                }
+
+                FlushCacheToStorage(context);
+            } finally
+            {
+                _cacheLock.ExitWriteLock();
+            }
+        }
+
         /// <summary>
-        /// Assumes that a write lock over <see cref="_cacheLock"/> is held by caller. It is also "idempotent", running it after itself won't change the outcome,
-        /// so if the cache is empty already nothing happens once it is called again.
+        /// Assumes that no cache operations are underway while it runs. Concretely, this means a write lock over
+        /// <see cref="_cacheLock"/> is held by caller.
         /// </summary>
         private void FlushCacheToStorage(OperationContext context)
         {
-            // Clears up the cache, ensuring that all working information has to be fetched from storage again. Not ideal,
-            // but simple semantics work for now.
+            // Clears up the cache, ensuring that the working set has to be fetched from storage again. Not ideal, but
+            // simple semantics work for now.
             var flushableCache = Interlocked.Exchange(ref _cache, new ConcurrentDictionary<ShortHash, ContentLocationEntry>());
             Interlocked.Exchange(ref _updatesSinceLastCacheFlush, 0);
 
             foreach (var kv in flushableCache)
             {
-                PersistStore(context, kv.Key, kv.Value);
+                if (kv.Value == null)
+                {
+                    PersistDelete(context, kv.Key);
+                } else
+                {
+                    PersistStore(context, kv.Key, kv.Value);
+                }
             }
         }
 
