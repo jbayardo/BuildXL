@@ -60,7 +60,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// activate/deactivate events. Its only purpose is to roughly help ensure flushes are more frequent as
         /// more operations are performed.
         /// </summary>
-        private int _updatesSinceLastCacheFlush = 0;
+        private int _cacheUpdatesSinceLastFlush = 0;
 
         /// <summary>
         /// This lock is not a RW lock in the sense that the cache may only have one writer at the time, but in the
@@ -129,8 +129,12 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                _configuration.UseCacheMiddleware = shouldUseCache;
+                _configuration.CacheEnabled = shouldUseCache;
                 FlushCacheToStorage(context);
+
+                var cacheFlushTimeSpan = shouldUseCache ? _configuration.CacheFlushingInterval
+                    : Timeout.InfiniteTimeSpan;
+                _cacheFlushTimer?.Change(cacheFlushTimeSpan, Timeout.InfiniteTimeSpan);
             } finally
             {
                 _cacheLock.ExitWriteLock();
@@ -149,12 +153,13 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     Timeout.InfiniteTimeSpan);
             }
 
-            if (_configuration.NagleFlushingInterval != Timeout.InfiniteTimeSpan)
+            if (_configuration.CacheFlushingInterval != Timeout.InfiniteTimeSpan)
             {
                 _cacheFlushTimer = new Timer(
                     _ => PeriodicFlushCacheToStorage(context),
                     null,
-                    _configuration.NagleFlushingInterval,
+                    _configuration.CacheEnabled ?
+                     _configuration.CacheFlushingInterval : Timeout.InfiniteTimeSpan,
                     Timeout.InfiniteTimeSpan);
             }
 
@@ -179,6 +184,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             lock (this)
             {
                 _gcTimer?.Dispose();
+                _cacheFlushTimer?.Dispose();
             }
 
             return base.ShutdownCoreAsync(context);
@@ -255,10 +261,10 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 _cacheLock.EnterWriteLock();
                 try
                 {
-                    wasUsingCache = _configuration.UseCacheMiddleware;
+                    wasUsingCache = _configuration.CacheEnabled;
                     if (wasUsingCache)
                     {
-                        _configuration.UseCacheMiddleware = false;
+                        _configuration.CacheEnabled = false;
                         FlushCacheToStorage(context);
                     }
                 }
@@ -274,7 +280,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 _cacheLock.EnterWriteLock();
                 try
                 {
-                    _configuration.UseCacheMiddleware = wasUsingCache;
+                    _configuration.CacheEnabled = wasUsingCache;
                 }
                 finally
                 {
@@ -309,9 +315,17 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             lock (this)
             {
-                if (!ShutdownStarted && _isGarbageCollectionEnabled)
+                if (!ShutdownStarted)
                 {
-                    _gcTimer?.Change(_configuration.LocalDatabaseGarbageCollectionInterval, Timeout.InfiniteTimeSpan);
+                    if (_isGarbageCollectionEnabled)
+                    {
+                        _gcTimer?.Change(_configuration.LocalDatabaseGarbageCollectionInterval, Timeout.InfiniteTimeSpan);
+                    }
+
+                    if (_configuration.CacheEnabled)
+                    {
+                        _cacheFlushTimer?.Change(_configuration.CacheFlushingInterval, Timeout.InfiniteTimeSpan);
+                    }
                 }
             }
         }
@@ -490,7 +504,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.UseCacheMiddleware)
+                if (!_configuration.CacheEnabled)
                 {
                     return TryGetEntryCoreFromStorage(context, hash, out entry);
                 }
@@ -533,7 +547,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             int updates = -1;
             try
             {
-                if (!_configuration.UseCacheMiddleware)
+                if (!_configuration.CacheEnabled)
                 {
                     PersistStore(context, hash, entry);
                     return;
@@ -544,12 +558,12 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             } finally
             {
                 // Ensure the increment is done as part of the current operation. When the cache is disabled, this will overflow.
-                updates = Interlocked.Increment(ref _updatesSinceLastCacheFlush);
+                updates = Interlocked.Increment(ref _cacheUpdatesSinceLastFlush);
                 _cacheLock.ExitReadLock();
             }
 
             // We can only be here if we previously sensed that the cache is active, otherwise we would have returned
-            if (updates == _configuration.NagleMaximumNumberOfUpdates)
+            if (updates == _configuration.CacheMaximumUpdatesPerFlush)
             {
                 // The fact that this is == is important to ensure it can only be triggered once by this condition
                 PeriodicFlushCacheToStorage(context);
@@ -566,7 +580,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.UseCacheMiddleware)
+                if (!_configuration.CacheEnabled)
                 {
                     PersistDelete(context, hash);
                     return;
@@ -586,7 +600,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.UseCacheMiddleware)
+                if (!_configuration.CacheEnabled)
                 {
                     return;
                 }
@@ -607,7 +621,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             // Clears up the cache, ensuring that the working set has to be fetched from storage again. Not ideal, but
             // simple semantics work for now.
             var flushableCache = Interlocked.Exchange(ref _cache, new ConcurrentDictionary<ShortHash, ContentLocationEntry>());
-            Interlocked.Exchange(ref _updatesSinceLastCacheFlush, 0);
+            Interlocked.Exchange(ref _cacheUpdatesSinceLastFlush, 0);
 
             foreach (var kv in flushableCache)
             {

@@ -32,21 +32,21 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// When activated, the requests effectively sent to the database will be initally done in memory and later on
         /// flushed to the underlying store.
         /// </summary>
-        public bool UseCacheMiddleware { get; set; } = false;
+        public bool CacheEnabled { get; set; } = true;
 
         /// <summary>
         /// The maximum number of updates that we are willing to perform in memory before flushing.
         /// 
-        /// Only effective when <see cref="UseCacheMiddleware"/> is activated.
+        /// Only effective when <see cref="CacheEnabled"/> is activated.
         /// </summary>
-        public int NagleMaximumNumberOfUpdates { get; set; } = 10000;
+        public int CacheMaximumUpdatesPerFlush { get; set; } = 10000;
 
         /// <summary>
         /// The maximum amount of time that can pass without a flush.
         /// 
-        /// Only effective when <see cref="UseCacheMiddleware"/> is activated.
+        /// Only effective when <see cref="CacheEnabled"/> is activated.
         /// </summary>
-        public TimeSpan NagleFlushingInterval { get; set; } = TimeSpan.FromMinutes(1);
+        public TimeSpan CacheFlushingInterval { get; set; } = TimeSpan.FromMinutes(1);
     }
 
     /// <summary>

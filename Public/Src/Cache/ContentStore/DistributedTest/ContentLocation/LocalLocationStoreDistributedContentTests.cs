@@ -2047,7 +2047,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return true;
         }
 
-        [Fact]
+        [Fact(Skip="Made to be run manually")]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnNewEntries()
         {
             bool useIncrementalCheckpointing = true;
@@ -2174,7 +2174,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return events;
         }
 
-        [Fact]
+        [Fact(Skip = "Made to be run manually")]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnMixedAddAndDelete()
         {
             bool useIncrementalCheckpointing = true;
@@ -2318,7 +2318,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return events;
         }
 
-        //[Fact]
+        //[Fact(Skip="Made to be run manually")]
         //public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnDelete()
         //{
         //    bool useIncrementalCheckpointing = true;
