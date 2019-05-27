@@ -55,13 +55,13 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache.InMemory
         }
 
         /// <inheritdoc />
-        public override IEnumerable<ShortHash> EnumerateSortedKeys(CancellationToken token)
+        protected override IEnumerable<ShortHash> EnumerateSortedKeysFromStorage(CancellationToken token)
         {
             return _map.Keys.OrderBy(h => h);
         }
 
         /// <inheritdoc />
-        public override IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeys(
+        protected override IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeysFromStorage(
             CancellationToken token,
             EnumerationFilter filter = null)
         {

@@ -117,7 +117,7 @@ namespace ContentStoreTest.Distributed.Sessions
 
         private static IEnumerable<(ShortHash hash, long size)> GetSortedDatabaseEntriesWithLocalLocationOld(OperationContext context, RocksDbContentLocationDatabase db, int index)
         {
-            foreach (var hash in db.EnumerateSortedKeys(context.Token))
+            foreach (var hash in db.EnumerateSortedKeys(context))
             {
                 if (db.TryGetEntry(context, hash, out var entry))
                 {

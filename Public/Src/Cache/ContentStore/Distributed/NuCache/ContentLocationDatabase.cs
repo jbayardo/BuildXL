@@ -66,8 +66,10 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// This lock is not a RW lock in the sense that the cache may only have one writer at the time, but in the
         /// sense that some operations over the cache reference and underlying store may only have one writer at the
         /// time.
+        ///
+        /// The lock needs to be reentrant for garbage collection to work
         /// </summary>
-        private readonly ReaderWriterLockSlim _cacheLock = new ReaderWriterLockSlim();
+        private readonly ReaderWriterLockSlim _cacheLock = new ReaderWriterLockSlim(LockRecursionPolicy.SupportsRecursion);
 
         /// <summary>
         /// Controls cache flushing due to timeout.
@@ -85,29 +87,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             _configuration = configuration;
             _getInactiveMachines = getInactiveMachines;
         }
-
-        /// <summary>
-        /// Synchronizes machine location data between the database and the given cluster state instance
-        /// </summary>
-        public void UpdateClusterState(OperationContext context, ClusterState clusterState, bool write)
-        {
-            if (!_configuration.StoreClusterState)
-            {
-                return;
-            }
-
-            context.PerformOperation(
-                Tracer,
-                () =>
-                {
-                    // TODO: Handle setting inactive machines here
-                    UpdateClusterStateCore(context, clusterState, write);
-                    return BoolResult.Success;
-                }).IgnoreFailure();
-        }
-
-        /// <nodoc />
-        protected abstract void UpdateClusterStateCore(OperationContext context, ClusterState clusterState, bool write);
 
         /// <summary>
         /// Factory method that creates an instance of a <see cref="ContentLocationDatabase"/> based on an optional <paramref name="configuration"/> instance.
@@ -141,13 +120,16 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             }
         }
 
+        /// <summary>
+        /// Configures the behavior of the cache middleware
+        /// </summary>
         public void ConfigureDatabaseCache(OperationContext context, bool shouldUseCache)
         {
             _cacheLock.EnterWriteLock();
 
             try
             {
-                _configuration.NagleStoreRequests = shouldUseCache;
+                _configuration.UseCacheMiddleware = shouldUseCache;
                 FlushCacheToStorage(context);
             } finally
             {
@@ -219,27 +201,89 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             return false;
         }
 
+        /// <nodoc />
+        protected abstract IEnumerable<ShortHash> EnumerateSortedKeysFromStorage(CancellationToken token);
+
         /// <summary>
         /// Gets a sequence of keys.
-        ///
-        /// WARNING: when the cache is in effect, this list may not be coherent with the actual keys being managed by the database, as it will come from the
-        /// information on disk and not the data in memory.
         /// </summary>
-        public abstract IEnumerable<ShortHash> EnumerateSortedKeys(CancellationToken token);
+        public IEnumerable<ShortHash> EnumerateSortedKeys(OperationContext context)
+        {
+            return WithCacheDisabled(context, delegate ()
+            {
+                return EnumerateSortedKeysFromStorage(context.Token);
+            });
+        }
 
         /// <summary>
         /// Enumeration filter used by <see cref="ContentLocationDatabase.EnumerateEntriesWithSortedKeys"/> to filter out entries by raw value from a database.
         /// </summary>
         public delegate bool EnumerationFilter(byte[] value);
 
-        /// <summary>
-        /// Gets a sequence of keys and values sorted by keys.
-        ///
-        /// WARNING: this should never be used when the cache is in effect, as there may be discrepancies between the returned value and the actual values.
-        /// </summary>
-        public abstract IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeys(
+        /// <nodoc />
+        protected abstract IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeysFromStorage(
             CancellationToken token,
             EnumerationFilter filter = null);
+
+        /// <summary>
+        /// Gets a sequence of keys and values sorted by keys.
+        /// </summary>
+        public IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeys(
+            OperationContext context,
+            EnumerationFilter filter = null)
+        {
+            return WithCacheDisabled(context, delegate ()
+            {
+                return EnumerateEntriesWithSortedKeysFromStorage(context.Token, filter);
+            });
+        }
+
+        /// <summary>
+        /// Performs a function ensuring that the cache is disabled throughout its execution, so all operations are
+        /// passthrough to the underlying store.
+        /// </summary>
+        private T WithCacheDisabled<T>(OperationContext context, Func<T> action)
+        {
+            _cacheLock.EnterUpgradeableReadLock();
+
+            var wasUsingCache = false;
+            try
+            {
+                // We upgrade to write lock in order to perform the change in the configuration, and then downgrade so
+                // that operations may still be performed concurrently, while ensuring that the cache configuration is
+                // not changed by any other thread.
+                _cacheLock.EnterWriteLock();
+                try
+                {
+                    wasUsingCache = _configuration.UseCacheMiddleware;
+                    if (wasUsingCache)
+                    {
+                        _configuration.UseCacheMiddleware = false;
+                        FlushCacheToStorage(context);
+                    }
+                }
+                finally
+                {
+                    _cacheLock.ExitWriteLock();
+                }
+                
+                return action();
+            }
+            finally
+            {
+                _cacheLock.EnterWriteLock();
+                try
+                {
+                    _configuration.UseCacheMiddleware = wasUsingCache;
+                }
+                finally
+                {
+                    _cacheLock.ExitWriteLock();
+                }
+
+                _cacheLock.ExitUpgradeableReadLock();
+            }
+        }
 
         /// <summary>
         /// Collects entries with last access time longer then time to live.
@@ -256,7 +300,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             using (var cancellableContext = TrackShutdown(context))
             {
-                DoGarbageCollect(cancellableContext);
+                WithCacheDisabled(context, delegate ()
+                {
+                    DoGarbageCollect(cancellableContext);
+                    return 0;
+                });
             }
 
             lock (this)
@@ -290,7 +338,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
                 ShortHash? lastHash = null;
 
-                foreach (var hash in EnumerateSortedKeys(context.Token))
+                foreach (var hash in EnumerateSortedKeys(context))
                 {
                     totalEntries++;
 
@@ -376,6 +424,34 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <summary>
+        /// Synchronizes machine location data between the database and the given cluster state instance
+        /// </summary>
+        public void UpdateClusterState(OperationContext context, ClusterState clusterState, bool write)
+        {
+            if (!_configuration.StoreClusterState)
+            {
+                return;
+            }
+
+            context.PerformOperation(
+                Tracer,
+                () =>
+                {
+                    // TODO: Handle setting inactive machines here
+                    WithCacheDisabled(context, delegate ()
+                    {
+                        UpdateClusterStateCore(context, clusterState, write);
+                        return 0;
+                    });
+
+                    return BoolResult.Success;
+                }).IgnoreFailure();
+        }
+
+        /// <nodoc />
+        protected abstract void UpdateClusterStateCore(OperationContext context, ClusterState clusterState, bool write);
+
+        /// <summary>
         /// Gets whether the file in the database's checkpoint directory is immutable between checkpoints (i.e. files with the same name will have the same content)
         /// </summary>
         public abstract bool IsImmutable(AbsolutePath dbFile);
@@ -414,7 +490,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.NagleStoreRequests)
+                if (!_configuration.UseCacheMiddleware)
                 {
                     return TryGetEntryCoreFromStorage(context, hash, out entry);
                 }
@@ -457,7 +533,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             int updates = -1;
             try
             {
-                if (!_configuration.NagleStoreRequests)
+                if (!_configuration.UseCacheMiddleware)
                 {
                     PersistStore(context, hash, entry);
                     return;
@@ -490,7 +566,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.NagleStoreRequests)
+                if (!_configuration.UseCacheMiddleware)
                 {
                     PersistDelete(context, hash);
                     return;
@@ -510,7 +586,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.NagleStoreRequests)
+                if (!_configuration.UseCacheMiddleware)
                 {
                     return;
                 }

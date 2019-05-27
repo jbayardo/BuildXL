@@ -295,7 +295,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
-        public override IEnumerable<ShortHash> EnumerateSortedKeys(CancellationToken token)
+        protected override IEnumerable<ShortHash> EnumerateSortedKeysFromStorage(CancellationToken token)
         {
             var keyBuffer = new List<ShortHash>();
             byte[] startValue = null;
@@ -351,7 +351,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
-        public override IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeys(
+        protected override IEnumerable<(ShortHash key, ContentLocationEntry entry)> EnumerateEntriesWithSortedKeysFromStorage(
             CancellationToken token,
             EnumerationFilter filter = null)
         {
