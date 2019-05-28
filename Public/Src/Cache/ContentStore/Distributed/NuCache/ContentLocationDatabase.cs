@@ -474,7 +474,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         {
             using (Counters[ContentLocationDatabaseCounters.SaveCheckpoint].Start())
             {
-                return context.PerformOperation(Tracer, () => SaveCheckpointCore(context, checkpointDirectory));
+                return context.PerformOperation(
+                    Tracer,
+                    () => WithCacheDisabled(
+                        context,
+                        () => SaveCheckpointCore(context, checkpointDirectory)));
             }
         }
 
@@ -486,7 +490,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         {
             using (Counters[ContentLocationDatabaseCounters.RestoreCheckpoint].Start())
             {
-                return context.PerformOperation(Tracer, () => RestoreCheckpointCore(context, checkpointDirectory));
+                return context.PerformOperation(
+                    Tracer,
+                    () => WithCacheDisabled(
+                        context,
+                        () => RestoreCheckpointCore(context, checkpointDirectory)));
             }
         }
 

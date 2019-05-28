@@ -18,16 +18,24 @@ using Xunit.Abstractions;
 
 namespace ContentStoreTest.Distributed.ContentLocation.NuCache
 {
+    /// <summary>
+    /// These tests are meant to test very basic functionality of the cache. The reason no further testing is done is
+    /// because it would be intruding into the private implementation, instead of just unit testing.
+    /// </summary>
     public class ContentLocationDatabaseCacheTests : TestWithOutput
     {
         protected readonly MemoryClock _clock = new MemoryClock();
 
+        /// <summary>
+        /// Notice that a <see cref="MemoryContentLocationDatabaseConfiguration"/> is used. This is on purpose, to
+        /// avoid dealing with RocksDB.
+        /// </summary>
         protected ContentLocationDatabaseConfiguration DefaultConfiguration { get; } = new MemoryContentLocationDatabaseConfiguration
         {
             CacheEnabled = true,
-            // These are just to ensure no flushing happens unless explicitly directed
+            // These ensure no flushing happens unless explicitly directed
             CacheFlushingInterval = Timeout.InfiniteTimeSpan,
-            CacheMaximumUpdatesPerFlush = 10000
+            CacheMaximumUpdatesPerFlush = -1
         };
 
         protected readonly ContentLocationDatabase _database;
@@ -38,66 +46,101 @@ namespace ContentStoreTest.Distributed.ContentLocation.NuCache
             _database = ContentLocationDatabase.Create(_clock, DefaultConfiguration, () => new MachineId[] { });
         }
 
-        [Fact]
-        public async Task ReadMyWrites()
+        private async Task WithContext(Action<OperationContext> action)
         {
             var tracingContext = new Context(TestGlobal.Logger);
             var operationContext = new OperationContext(tracingContext);
 
             await _database.StartupAsync(operationContext).ShouldBeSuccess();
 
-            var machine = new MachineId(1);
-            var hash = new ShortHash(ContentHash.Random());
+            action(operationContext);
 
-            _database.LocationAdded(operationContext, hash, machine, 200);
-
-            _database.TryGetEntry(operationContext, hash, out var entry).Should().BeTrue();
-            entry.ContentSize.Should().Be(200);
-            entry.Locations.Count.Should().Be(1);
-            entry.Locations[machine].Should().Be(true);
-            
             await _database.ShutdownAsync(operationContext).ShouldBeSuccess();
         }
 
         [Fact]
-        public void GetFromCacheDoesNotAffectStore()
+        public Task ReadMyWrites()
         {
+            return WithContext(context =>
+             {
+                 var machine = new MachineId(1);
+                 var hash = new ShortHash(ContentHash.Random());
+
+                 _database.LocationAdded(context, hash, machine, 200);
+
+                 _database.TryGetEntry(context, hash, out var entry).Should().BeTrue();
+                 entry.ContentSize.Should().Be(200);
+                 entry.Locations.Count.Should().Be(1);
+                 entry.Locations[machine].Should().BeTrue();
+             });
         }
 
         [Fact]
-        public void DeleteFromCacheDoesNotAffectStore()
+        public Task ReadMyDeletes()
         {
+            return WithContext(context =>
+            {
+                var machine = new MachineId(1);
+                var hash = new ShortHash(ContentHash.Random());
 
+                _database.LocationAdded(context, hash, machine, 200);
+                _database.LocationRemoved(context, hash, machine);
+
+                _database.TryGetEntry(context, hash, out var entry).Should().BeFalse();
+            });
         }
 
         [Fact]
-        public void FlushReifiesChangesIntoStore()
+        public Task SubsequentWrites()
         {
+            return WithContext(context =>
+            {
+                var machine = new MachineId(1);
+                var machine2 = new MachineId(2);
+                var hash = new ShortHash(ContentHash.Random());
 
+                _database.LocationAdded(context, hash, machine, 200);
+                _database.LocationAdded(context, hash, machine2, 200);
+
+                _database.TryGetEntry(context, hash, out var entry).Should().BeTrue();
+                entry.ContentSize.Should().Be(200);
+                entry.Locations.Count.Should().Be(2);
+                entry.Locations[machine].Should().BeTrue();
+                entry.Locations[machine2].Should().BeTrue();
+            });
         }
 
         [Fact]
-        public void FlushDoesNotAllowConcurrentOperations()
+        public Task SizeChangeOverwrites()
         {
+            return WithContext(context =>
+            {
+                var machine = new MachineId(1);
+                var machine2 = new MachineId(2);
+                var hash = new ShortHash(ContentHash.Random());
 
+                _database.LocationAdded(context, hash, machine, 200);
+                _database.LocationAdded(context, hash, machine2, 400);
+
+                _database.TryGetEntry(context, hash, out var entry).Should().BeTrue();
+                entry.ContentSize.Should().Be(400);
+                entry.Locations.Count.Should().Be(2);
+                entry.Locations[machine].Should().BeTrue();
+                entry.Locations[machine2].Should().BeTrue();
+            });
         }
 
         [Fact]
-        public void FlushHappensAsScheduled()
+        public Task DeleteUnknownDoesNotFailOrModify()
         {
+            return WithContext(context =>
+            {
+                var machine = new MachineId(1);
+                var hash = new ShortHash(ContentHash.Random());
 
-        }
-
-        [Fact]
-        public void FlushHappensAfterKOperations()
-        {
-
-        }
-
-        [Fact]
-        public void CacheMissFetchesFromStore()
-        {
-
+                _database.LocationRemoved(context, hash, machine);
+                _database.TryGetEntry(context, hash, out var entry).Should().BeFalse();
+            });
         }
     }
 }
