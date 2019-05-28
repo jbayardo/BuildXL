@@ -39,7 +39,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// 
         /// Only effective when <see cref="CacheEnabled"/> is activated.
         /// </summary>
-        public int CacheMaximumUpdatesPerFlush { get; set; } = 10000;
+        public int CacheMaximumUpdatesPerFlush { get; set; } = 1000000;
 
         /// <summary>
         /// The maximum amount of time that can pass without a flush.

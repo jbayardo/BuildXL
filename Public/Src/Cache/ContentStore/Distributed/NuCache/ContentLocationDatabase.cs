@@ -131,14 +131,18 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             {
                 _configuration.CacheEnabled = shouldUseCache;
                 FlushCacheToStorage(context);
-
-                var cacheFlushTimeSpan = shouldUseCache ? _configuration.CacheFlushingInterval
-                    : Timeout.InfiniteTimeSpan;
-                _cacheFlushTimer?.Change(cacheFlushTimeSpan, Timeout.InfiniteTimeSpan);
-            } finally
+            }
+            finally
             {
                 _cacheLock.ExitWriteLock();
             }
+        }
+
+        private void ResetCacheFlushTimer(bool shouldUseCache)
+        {
+            var cacheFlushTimeSpan = shouldUseCache ? _configuration.CacheFlushingInterval
+                : Timeout.InfiniteTimeSpan;
+            _cacheFlushTimer?.Change(cacheFlushTimeSpan, Timeout.InfiniteTimeSpan);
         }
 
         /// <inheritdoc />
@@ -158,9 +162,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 _cacheFlushTimer = new Timer(
                     _ => PeriodicFlushCacheToStorage(context),
                     null,
-                    _configuration.CacheEnabled ?
-                     _configuration.CacheFlushingInterval : Timeout.InfiniteTimeSpan,
+                    Timeout.InfiniteTimeSpan,
                     Timeout.InfiniteTimeSpan);
+                ResetCacheFlushTimer(_configuration.CacheEnabled);
             }
 
             _nagleOperationTracer = NagleQueue<(ShortHash, EntryOperation, OperationReason, int)>.Create(
@@ -215,7 +219,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// </summary>
         public IEnumerable<ShortHash> EnumerateSortedKeys(OperationContext context)
         {
-            return WithCacheDisabled(context, delegate ()
+            return WithCacheDisabled(context, () =>
             {
                 return EnumerateSortedKeysFromStorage(context.Token);
             });
@@ -238,7 +242,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             OperationContext context,
             EnumerationFilter filter = null)
         {
-            return WithCacheDisabled(context, delegate ()
+            return WithCacheDisabled(context, () =>
             {
                 return EnumerateEntriesWithSortedKeysFromStorage(context.Token, filter);
             });
@@ -306,7 +310,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             using (var cancellableContext = TrackShutdown(context))
             {
-                WithCacheDisabled(context, delegate ()
+                WithCacheDisabled(context, () =>
                 {
                     DoGarbageCollect(cancellableContext);
                     return 0;
@@ -320,11 +324,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     if (_isGarbageCollectionEnabled)
                     {
                         _gcTimer?.Change(_configuration.LocalDatabaseGarbageCollectionInterval, Timeout.InfiniteTimeSpan);
-                    }
-
-                    if (_configuration.CacheEnabled)
-                    {
-                        _cacheFlushTimer?.Change(_configuration.CacheFlushingInterval, Timeout.InfiniteTimeSpan);
                     }
                 }
             }
@@ -452,7 +451,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 () =>
                 {
                     // TODO: Handle setting inactive machines here
-                    WithCacheDisabled(context, delegate ()
+                    WithCacheDisabled(context, () =>
                     {
                         UpdateClusterStateCore(context, clusterState, write);
                         return 0;
@@ -600,11 +599,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
             try
             {
-                if (!_configuration.CacheEnabled)
-                {
-                    return;
-                }
-
                 FlushCacheToStorage(context);
             } finally
             {
@@ -633,6 +627,10 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     PersistStore(context, kv.Key, kv.Value);
                 }
             }
+
+            // There's no point in triggering a new flush until the minimum amount of time has passed, or if the cache
+            // has been disabled.
+            ResetCacheFlushTimer(_configuration.CacheEnabled);
         }
 
         private ContentLocationEntry SetMachineExistenceAndUpdateDatabase(OperationContext context, ShortHash hash, MachineId? machine, bool existsOnMachine, long size, UnixTime? lastAccessTime, bool reconciling)
