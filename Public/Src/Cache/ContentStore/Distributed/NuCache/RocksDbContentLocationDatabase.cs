@@ -442,9 +442,16 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         }
 
         /// <inheritdoc />
-        protected override void PersistStore(OperationContext context, ShortHash hash, ContentLocationEntry entry)
+        protected override void Persist(OperationContext context, ShortHash hash, ContentLocationEntry entry)
         {
-            SaveToDb(context, hash, entry);
+            if (entry == null)
+            {
+                DeleteFromDb(context, hash);
+            }
+            else
+            {
+                SaveToDb(context, hash, entry);
+            }
         }
 
         private void SaveToDb(OperationContext context, ShortHash hash, ContentLocationEntry entry)
@@ -460,12 +467,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             store.Put(db.GetKey(hash), value);
 
             return Unit.Void;
-        }
-
-        /// <inheritdoc />
-        protected override void PersistDelete(OperationContext context, ShortHash hash)
-        {
-            DeleteFromDb(context, hash);
         }
 
         private void DeleteFromDb(OperationContext context, ShortHash hash)
