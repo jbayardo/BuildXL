@@ -139,6 +139,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 }
             }
 
+            /// <summary>
+            /// The above function, without the lock. Used because of perf benchmarks getting contention on
+            /// <see cref="_syncLock"/>. Since it is not part of the usual implementation of EventHub and not
+            /// clear it is required for correctness, it is removed here.
+            /// </summary>
             public void LockFreeSend(ContentLocationEventData eventData)
             {
                 OnEvent(eventData);
