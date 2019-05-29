@@ -501,7 +501,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             Store(context, hash, entry: null);
         }
 
-        private void FlushIfEnabled(OperationContext context)
+        internal void FlushIfEnabled(OperationContext context)
         {
             if (!_isInMemoryCacheEnabled)
             {
