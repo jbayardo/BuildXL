@@ -17,6 +17,7 @@ using BuildXL.Cache.ContentStore.Tracing.Internal;
 using BuildXL.Cache.ContentStore.Utils;
 using BuildXL.Utilities;
 using BuildXL.Utilities.Collections;
+using BuildXL.Utilities.ParallelAlgorithms;
 using BuildXL.Utilities.Tasks;
 using BuildXL.Utilities.Threading;
 using BuildXL.Utilities.Tracing;
@@ -513,6 +514,15 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 {
                     try
                     {
+                        var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(Environment.ProcessorCount, kv => {
+                            lock (GetLock(kv.Key))
+                            {
+                                Persist(context, kv.Key, kv.Value);
+
+                                _inMemoryWriteCache.CompareRemove(kv.Key, kv.Value);
+                            }
+                        });
+
                         using (_inMemoryWriteCacheLock.AcquireWriteLock())
                         {
                             // Ensure writing to storage under exclusive lock so that any write operation following
@@ -520,13 +530,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                             // TODO: Can we do this outside of lock by having safe enumeration in ConcurrentBigSet
                             foreach (var kv in _inMemoryWriteCache)
                             {
-                                lock (GetLock(kv.Key))
-                                {
-                                    Persist(context, kv.Key, kv.Value);
-
-                                    _inMemoryWriteCache.CompareRemove(kv.Key, kv.Value);
-                                }
+                                actionBlock.Post(kv);
                             }
+
+                            actionBlock.Complete();
+                            actionBlock.CompletionAsync().Wait();
                         }
 
                         return BoolResult.Success;

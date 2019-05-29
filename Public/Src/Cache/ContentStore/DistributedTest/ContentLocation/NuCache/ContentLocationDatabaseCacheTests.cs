@@ -52,6 +52,7 @@ namespace ContentStoreTest.Distributed.ContentLocation.NuCache
             var operationContext = new OperationContext(tracingContext);
 
             await _database.StartupAsync(operationContext).ShouldBeSuccess();
+            _database.SetDatabaseMode(isDatabaseWritable: true);
 
             action(operationContext);
 
