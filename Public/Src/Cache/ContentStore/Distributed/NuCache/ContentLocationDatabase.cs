@@ -529,9 +529,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     try
                     {
                         var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(_configuration.CacheFlushDegreeOfParallelism, kv => {
-                            /// Do not lock on <see cref="GetLock" /> here, as it will cause a deadlock with
-                            /// <see cref="SetMachineExistenceAndUpdateDatabase"/>. It is correct not do take any locks
-                            /// as well, because there no <see cref="Store"/> can happen while flush is running.
+                            // Do not lock on GetLock here, as it will cause a deadlock with
+                            // SetMachineExistenceAndUpdateDatabase. It is correct not do take any locks as well,
+                            // because there no Store can happen while flush is running.
                             Persist(context, kv.Key, kv.Value);
                             _inMemoryWriteCache.CompareRemove(kv.Key, kv.Value);
                         });
@@ -539,10 +539,10 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                         using (_inMemoryWriteCacheLock.AcquireWriteLock())
                         using (Counters[ContentLocationDatabaseCounters.CacheFlush].Start())
                         {
-                            /// Ensure writing to storage under exclusive lock so that any write operation following
-                            /// this will be guaranteed write to backing storage (even pending write operations).
-                            /// Notice that this loop can't be taken outside of the lock without risking cache
-                            /// incoherence with <see cref="TryGetEntryCore"/>.
+                            // Ensure writing to storage under exclusive lock so that any write operation following
+                            // this will be guaranteed write to backing storage (even pending write operations).
+                            // Notice that this loop can't be taken outside of the lock without risking cache
+                            // incoherence with TryGetEntryCore.
                             foreach (var kv in _inMemoryWriteCache)
                             {
                                 actionBlock.Post(kv);
@@ -556,7 +556,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     }
                     finally
                     {
-                        /// Do not use <see cref="Volatile.Write"/> here; the memory being used is not volatile.
+                        // Do not use Volatile.Write here; the memory being used is not volatile.
                         Interlocked.Exchange(ref _cacheUpdatesSinceLastFlush, 0);
                         ResetFlushTimer();
                     }
