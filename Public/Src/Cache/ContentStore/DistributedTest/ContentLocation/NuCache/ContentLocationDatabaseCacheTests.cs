@@ -34,7 +34,7 @@ namespace ContentStoreTest.Distributed.ContentLocation.NuCache
         {
             CacheEnabled = true,
             // These ensure no flushing happens unless explicitly directed
-            CacheFlushingInterval = Timeout.InfiniteTimeSpan,
+            CacheFlushingMaximumInterval = Timeout.InfiniteTimeSpan,
             CacheMaximumUpdatesPerFlush = -1
         };
 

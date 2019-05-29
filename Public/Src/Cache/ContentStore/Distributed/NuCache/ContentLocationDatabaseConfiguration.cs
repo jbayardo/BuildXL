@@ -46,7 +46,14 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// 
         /// Only effective when <see cref="CacheEnabled"/> is activated.
         /// </summary>
-        public TimeSpan CacheFlushingInterval { get; set; } = TimeSpan.FromMinutes(1);
+        public TimeSpan CacheFlushingMaximumInterval { get; set; } = TimeSpan.FromMinutes(1);
+
+        /// <summary>
+        /// Number of threads to use when flushing updates to the underlying storage
+        ///
+        /// Only effective when <see cref="CacheEnabled"/> is activated.
+        /// </summary>
+        public int CacheFlushDegreeOfParallelism { get; set; } = Environment.ProcessorCount;
     }
 
     /// <summary>

@@ -150,7 +150,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             lock (_cacheFlushTimerLock)
             {
                 var cacheFlushTimeSpan = _isInMemoryCacheEnabled
-                    ? _configuration.CacheFlushingInterval
+                    ? _configuration.CacheFlushingMaximumInterval
                     : Timeout.InfiniteTimeSpan;
 
                 _inMemoryCacheFlushTimer?.Change(cacheFlushTimeSpan, Timeout.InfiniteTimeSpan);
@@ -169,10 +169,13 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     Timeout.InfiniteTimeSpan);
             }
 
-            if (_configuration.CacheEnabled && _configuration.CacheFlushingInterval != Timeout.InfiniteTimeSpan)
+            if (_configuration.CacheEnabled && _configuration.CacheFlushingMaximumInterval != Timeout.InfiniteTimeSpan)
             {
                 _inMemoryCacheFlushTimer = new Timer(
-                    _ => FlushIfEnabled(context),
+                    _ => {
+                        Counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByTimer].Increment();
+                        FlushIfEnabled(context);
+                    },
                     null,
                     Timeout.InfiniteTimeSpan,
                     Timeout.InfiniteTimeSpan);
@@ -254,6 +257,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             OperationContext context,
             EnumerationFilter filter = null)
         {
+            Counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByGarbageCollection].Increment();
             FlushIfEnabled(context);
             return EnumerateEntriesWithSortedKeysFromStorage(context.Token, filter);
         }
@@ -429,6 +433,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         {
             using (Counters[ContentLocationDatabaseCounters.SaveCheckpoint].Start())
             {
+                Counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByCheckpoint].Increment();
                 FlushIfEnabled(context);
                 return context.PerformOperation(Tracer, () => SaveCheckpointCore(context, checkpointDirectory));
             }
@@ -452,16 +457,20 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         protected abstract bool TryGetEntryCoreFromStorage(OperationContext context, ShortHash hash, out ContentLocationEntry entry);
 
-        
-
         /// <nodoc />
         protected bool TryGetEntryCore(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
         {
-            if (_isInMemoryCacheEnabled && _inMemoryWriteCache.TryGetValue(hash, out entry))
+            if (_isInMemoryCacheEnabled)
             {
-                // The entry could be a tombstone, so we need to make sure the user knows content has actually been
-                // deleted.
-                return entry != null;
+                if (_inMemoryWriteCache.TryGetValue(hash, out entry))
+                {
+                    Counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Increment();
+                    // The entry could be a tombstone, so we need to make sure the user knows content has actually been
+                    // deleted.
+                    return entry != null;
+                }
+
+                Counters[ContentLocationDatabaseCounters.TotalNumberOfCacheMiss].Increment();
             }
 
             return TryGetEntryCoreFromStorage(context, hash, out entry);
@@ -482,9 +491,12 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     updates = Interlocked.Increment(ref _cacheUpdatesSinceLastFlush);
                 }
 
-                // We can only be here if we previously sensed that the cache is active, otherwise we would have returned
+                // We can only be here if we previously sensed that the cache is active, otherwise we would have
+                // returned
                 if (updates == _configuration.CacheMaximumUpdatesPerFlush)
                 {
+                    Counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByUpdates].Increment();
+
                     // The fact that this is == is important to ensure it can only be triggered once by this condition
                     FlushIfEnabled(context);
                 }
@@ -508,26 +520,29 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 return;
             }
 
+            Counters[ContentLocationDatabaseCounters.TotalNumberOfCacheFlushes].Increment();
+
             context.PerformOperation(
                 Tracer,
                 () =>
                 {
                     try
                     {
-                        var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(Environment.ProcessorCount, kv => {
-                            lock (GetLock(kv.Key))
-                            {
-                                Persist(context, kv.Key, kv.Value);
-
-                                _inMemoryWriteCache.CompareRemove(kv.Key, kv.Value);
-                            }
+                        var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(_configuration.CacheFlushDegreeOfParallelism, kv => {
+                            /// Do not lock on <see cref="GetLock" /> here, as it will cause a deadlock with
+                            /// <see cref="SetMachineExistenceAndUpdateDatabase"/>. It is correct not do take any locks
+                            /// as well, because there no <see cref="Store"/> can happen while flush is running.
+                            Persist(context, kv.Key, kv.Value);
+                            _inMemoryWriteCache.CompareRemove(kv.Key, kv.Value);
                         });
 
                         using (_inMemoryWriteCacheLock.AcquireWriteLock())
+                        using (Counters[ContentLocationDatabaseCounters.CacheFlush].Start())
                         {
-                            // Ensure writing to storage under exclusive lock so that any write operation following
-                            // this will be guaranteed write to backing storage (even pending write operations)
-                            // TODO: Can we do this outside of lock by having safe enumeration in ConcurrentBigSet
+                            /// Ensure writing to storage under exclusive lock so that any write operation following
+                            /// this will be guaranteed write to backing storage (even pending write operations).
+                            /// Notice that this loop can't be taken outside of the lock without risking cache
+                            /// incoherence with <see cref="TryGetEntryCore"/>.
                             foreach (var kv in _inMemoryWriteCache)
                             {
                                 actionBlock.Post(kv);
@@ -541,7 +556,8 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                     }
                     finally
                     {
-                        Volatile.Write(ref _cacheUpdatesSinceLastFlush, 0);
+                        /// Do not use <see cref="Volatile.Write"/> here; the memory being used is not volatile.
+                        Interlocked.Exchange(ref _cacheUpdatesSinceLastFlush, 0);
                         ResetFlushTimer();
                     }
                 }).ThrowIfFailure();
@@ -549,9 +565,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         private ContentLocationEntry SetMachineExistenceAndUpdateDatabase(OperationContext context, ShortHash hash, MachineId? machine, bool existsOnMachine, long size, UnixTime? lastAccessTime, bool reconciling)
         {
-            bool created = false;
-            OperationReason reason = reconciling ? OperationReason.Reconcile : OperationReason.Unknown;
-            int priorLocationCount = 0;
+            var created = false;
+            var reason = reconciling ? OperationReason.Reconcile : OperationReason.Unknown;
+            var priorLocationCount = 0;
             lock (GetLock(hash))
             {
                 if (TryGetEntryCore(context, hash, out var entry))
