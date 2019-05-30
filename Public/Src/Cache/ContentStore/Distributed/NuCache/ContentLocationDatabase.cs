@@ -57,6 +57,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         private ConcurrentBigMap<ShortHash, ContentLocationEntry> _inMemoryWriteCache = new ConcurrentBigMap<ShortHash, ContentLocationEntry>();
 
+        public bool IsInMemoryCacheEnabled => _isInMemoryCacheEnabled;
         private bool _isInMemoryCacheEnabled = false;
 
         /// <summary>

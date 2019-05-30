@@ -2331,7 +2331,7 @@ namespace ContentStoreTest.Distributed.Sessions
             int warmupBatches = 10000;
             int numberOfMachines = 100;
             int operationsPerMachine = 25000;
-            float cacheHitRatio = 0.4f;
+            float cacheHitRatio = 0.9f;
             int maximumBatchSize = 1000;
 
             var centralStoreConfiguration = new LocalDiskCentralStoreConfiguration(TestRootDirectoryPath / "centralstore", Guid.NewGuid().ToString());
@@ -2366,6 +2366,7 @@ namespace ContentStoreTest.Distributed.Sessions
                     var sessions = context.Sessions;
                     Warmup(maximumBatchSize, warmupBatches, memoryContentLocationEventStore);
                     context.GetMaster().LocalLocationStore.Database.FlushIfEnabled(context);
+                    PrintCacheStatistics(context);
 
                     {
                         var stopWatch = new Stopwatch();
@@ -2390,10 +2391,37 @@ namespace ContentStoreTest.Distributed.Sessions
                             ts.Hours, ts.Minutes, ts.Seconds,
                             ts.Milliseconds / 10);
                         Output.WriteLine("[Benchmark] Total Time: " + ts);
+
+                        PrintCacheStatistics(context);
                     }
 
                     await Task.Delay(5000);
                 });
+        }
+
+        private void PrintCacheStatistics(TestContext context)
+        {
+            var db = context.GetMaster().LocalLocationStore.Database;
+            var counters = db.Counters;
+
+            if (db.IsInMemoryCacheEnabled)
+            {
+                Output.WriteLine("CACHE IS BEING USED");
+            } else
+            {
+                Output.WriteLine("NO CACHE");
+            }
+
+            Output.WriteLine("[Statistics] TotalNumberOfCacheHit: " + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].ToString());
+            Output.WriteLine("[Statistics] TotalNumberOfCacheMiss: " + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheMiss].ToString());
+
+            var hitRate = counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Value / (counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Value + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheMiss].Value + 1);
+            Output.WriteLine("[Statistics] CacheFlush: " + counters[ContentLocationDatabaseCounters.CacheFlush].ToString());
+            Output.WriteLine("[Statistics] TotalNumberOfCacheFlushes: " + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheFlushes].ToString());
+            Output.WriteLine("[Statistics] NumberOfCacheFlushesTriggeredByUpdates: " + counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByUpdates].ToString());
+            Output.WriteLine("[Statistics] NumberOfCacheFlushesTriggeredByTimer: " + counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByTimer].ToString());
+            Output.WriteLine("[Statistics] NumberOfCacheFlushesTriggeredByGarbageCollection: " + counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByGarbageCollection].ToString());
+            Output.WriteLine("[Statistics] NumberOfCacheFlushesTriggeredByCheckpoint: " + counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByCheckpoint].ToString());
         }
 
         private static List<List<ContentLocationEventData>> GenerateUniquenessWorkload(int numberOfMachines, float cacheHitRatio, int maximumBatchSize, int operationsPerMachine, int? randomSeedOverride = null)
