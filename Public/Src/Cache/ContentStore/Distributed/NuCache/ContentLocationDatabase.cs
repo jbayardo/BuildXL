@@ -528,6 +528,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 {
                     try
                     {
+                        // TODO: keep two dicts and swap them for flush.
+                        // TODO: use WriteBatch to speed up
+
                         var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(_configuration.CacheFlushDegreeOfParallelism, kv => {
                             // Do not lock on GetLock here, as it will cause a deadlock with
                             // SetMachineExistenceAndUpdateDatabase. It is correct not do take any locks as well,
