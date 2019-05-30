@@ -57,6 +57,9 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         private ConcurrentBigMap<ShortHash, ContentLocationEntry> _inMemoryWriteCache = new ConcurrentBigMap<ShortHash, ContentLocationEntry>();
 
+        private ConcurrentBigMap<ShortHash, ContentLocationEntry> _flushingInMemoryWriteCache = new ConcurrentBigMap<ShortHash, ContentLocationEntry>();
+        private readonly object _cacheFlushLock = new object();
+
         public bool IsInMemoryCacheEnabled => _isInMemoryCacheEnabled;
         private bool _isInMemoryCacheEnabled = false;
 
@@ -66,8 +69,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// more operations are performed.
         /// </summary>
         private int _cacheUpdatesSinceLastFlush = 0;
-
-        private readonly ReadWriteLock _inMemoryWriteCacheLock = ReadWriteLock.Create();
 
         /// <summary>
         /// Controls cache flushing due to timeout.
@@ -463,11 +464,15 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         {
             if (_isInMemoryCacheEnabled)
             {
+                // The entry could be a tombstone, so we need to make sure the user knows content has actually been
+                // deleted, which is why we check for null.
                 if (_inMemoryWriteCache.TryGetValue(hash, out entry))
                 {
                     Counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Increment();
-                    // The entry could be a tombstone, so we need to make sure the user knows content has actually been
-                    // deleted.
+                    return entry != null;
+                } else if (_flushingInMemoryWriteCache.TryGetValue(hash, out entry))
+                {
+                    Counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Increment();
                     return entry != null;
                 }
 
@@ -485,20 +490,12 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         {
             if (_isInMemoryCacheEnabled)
             {
-                int updates = 0;
-                using (_inMemoryWriteCacheLock.AcquireReadLock())
-                {
-                    _inMemoryWriteCache[hash] = entry;
-                    updates = Interlocked.Increment(ref _cacheUpdatesSinceLastFlush);
-                }
+                _inMemoryWriteCache[hash] = entry;
 
-                // We can only be here if we previously sensed that the cache is active, otherwise we would have
-                // returned
-                if (updates == _configuration.CacheMaximumUpdatesPerFlush)
+                // The fact that this is == is important to ensure it can only be triggered once by this condition
+                if (Interlocked.Increment(ref _cacheUpdatesSinceLastFlush) == _configuration.CacheMaximumUpdatesPerFlush)
                 {
                     Counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByUpdates].Increment();
-
-                    // The fact that this is == is important to ensure it can only be triggered once by this condition
                     FlushIfEnabled(context);
                 }
             }
@@ -529,7 +526,6 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 {
                     try
                     {
-                        // TODO: keep two dicts and swap them for flush.
                         // TODO: use WriteBatch to speed up
 
                         var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(_configuration.CacheFlushDegreeOfParallelism, kv => {
@@ -537,23 +533,36 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                             // SetMachineExistenceAndUpdateDatabase. It is correct not do take any locks as well,
                             // because there no Store can happen while flush is running.
                             Persist(context, kv.Key, kv.Value);
-                            _inMemoryWriteCache.CompareRemove(kv.Key, kv.Value);
                         });
 
-                        using (_inMemoryWriteCacheLock.AcquireWriteLock())
-                        using (Counters[ContentLocationDatabaseCounters.CacheFlush].Start())
+                        // This lock is required to ensure no flushes happen concurrently. We may loose updates if
+                        // that happens.
+                        lock (_cacheFlushLock)
                         {
-                            // Ensure writing to storage under exclusive lock so that any write operation following
-                            // this will be guaranteed write to backing storage (even pending write operations).
-                            // Notice that this loop can't be taken outside of the lock without risking cache
-                            // incoherence with TryGetEntryCore.
-                            foreach (var kv in _inMemoryWriteCache)
+                            Contract.Assert(_flushingInMemoryWriteCache.Count == 0);
+
+                            // Make the flushing cache equivalent to the working cache. Since they are the same
+                            // objects, changes are concurrent to both (i.e. no updates are lost between this line and
+                            // the next).
+                            Interlocked.Exchange(ref _flushingInMemoryWriteCache, _inMemoryWriteCache);
+
+                            // Make the working cache be a new object. This way, all new operations from this point in
+                            // time will be filled from this empty cache, backed with the flushing cache, and in the
+                            // worst case hitting the store. Point being, the flushing cache becomes read-only.
+                            Interlocked.Exchange(ref _inMemoryWriteCache, new ConcurrentBigMap<ShortHash, ContentLocationEntry>());
+
+                            using (Counters[ContentLocationDatabaseCounters.CacheFlush].Start())
                             {
-                                actionBlock.Post(kv);
+                                foreach (var kv in _flushingInMemoryWriteCache)
+                                {
+                                    actionBlock.Post(kv);
+                                }
+
+                                actionBlock.Complete();
+                                actionBlock.CompletionAsync().Wait();
                             }
 
-                            actionBlock.Complete();
-                            actionBlock.CompletionAsync().Wait();
+                            Interlocked.Exchange(ref _flushingInMemoryWriteCache, new ConcurrentBigMap<ShortHash, ContentLocationEntry>());
                         }
 
                         return BoolResult.Success;

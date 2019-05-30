@@ -32,7 +32,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// When activated, the requests effectively sent to the database will be initally done in memory and later on
         /// flushed to the underlying store.
         /// </summary>
-        public bool CacheEnabled { get; set; } = false;
+        public bool CacheEnabled { get; set; } = true;
 
         /// <summary>
         /// The maximum number of updates that we are willing to perform in memory before flushing.
