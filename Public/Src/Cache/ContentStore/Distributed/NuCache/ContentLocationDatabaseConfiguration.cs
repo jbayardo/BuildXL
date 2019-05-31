@@ -54,6 +54,8 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// Only effective when <see cref="CacheEnabled"/> is activated.
         /// </summary>
         public int CacheFlushDegreeOfParallelism { get; set; } = Environment.ProcessorCount;
+
+        public bool CacheFlushSingleTransaction { get; set; } = true;
     }
 
     /// <summary>

@@ -486,6 +486,15 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         protected abstract void Persist(OperationContext context, ShortHash hash, ContentLocationEntry entry);
 
         /// <nodoc />
+        protected virtual void PersistBatch(OperationContext context, IEnumerable<KeyValuePair<ShortHash, ContentLocationEntry>> pairs)
+        {
+            foreach (var pair in pairs)
+            {
+                Persist(context, pair.Key, pair.Value);
+            }
+        }
+
+        /// <nodoc />
         protected void Store(OperationContext context, ShortHash hash, ContentLocationEntry entry)
         {
             if (_isInMemoryCacheEnabled)
@@ -496,7 +505,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 if (Interlocked.Increment(ref _cacheUpdatesSinceLastFlush) == _configuration.CacheMaximumUpdatesPerFlush)
                 {
                     Counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByUpdates].Increment();
-                    FlushIfEnabled(context);
+                    Task.Run(() => FlushIfEnabled(context)).Forget();
                 }
             }
             else
@@ -526,43 +535,47 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
                 {
                     try
                     {
-                        // TODO: use WriteBatch to speed up
-
-                        var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(_configuration.CacheFlushDegreeOfParallelism, kv => {
-                            // Do not lock on GetLock here, as it will cause a deadlock with
-                            // SetMachineExistenceAndUpdateDatabase. It is correct not do take any locks as well,
-                            // because there no Store can happen while flush is running.
-                            Persist(context, kv.Key, kv.Value);
-                        });
-
                         // This lock is required to ensure no flushes happen concurrently. We may loose updates if
                         // that happens.
                         lock (_cacheFlushLock)
                         {
-                            Contract.Assert(_flushingInMemoryWriteCache.Count == 0);
-
-                            // Make the flushing cache equivalent to the working cache. Since they are the same
-                            // objects, changes are concurrent to both (i.e. no updates are lost between this line and
-                            // the next).
-                            Interlocked.Exchange(ref _flushingInMemoryWriteCache, _inMemoryWriteCache);
-
-                            // Make the working cache be a new object. This way, all new operations from this point in
-                            // time will be filled from this empty cache, backed with the flushing cache, and in the
-                            // worst case hitting the store. Point being, the flushing cache becomes read-only.
-                            Interlocked.Exchange(ref _inMemoryWriteCache, new ConcurrentBigMap<ShortHash, ContentLocationEntry>());
-
                             using (Counters[ContentLocationDatabaseCounters.CacheFlush].Start())
                             {
-                                foreach (var kv in _flushingInMemoryWriteCache)
+                                Contract.Assert(_flushingInMemoryWriteCache.Count == 0);
+
+                                // Make the flushing cache equivalent to the working cache. Since they are the same
+                                // objects, changes are concurrent to both (i.e. no updates are lost between this line and
+                                // the next).
+                                Interlocked.Exchange(ref _flushingInMemoryWriteCache, _inMemoryWriteCache);
+
+                                // Make the working cache be a new object. This way, all new operations from this point in
+                                // time will be filled from this empty cache, backed with the flushing cache, and in the
+                                // worst case hitting the store. Point being, the flushing cache becomes read-only.
+                                Interlocked.Exchange(ref _inMemoryWriteCache, new ConcurrentBigMap<ShortHash, ContentLocationEntry>());
+
+                                if (_configuration.CacheFlushSingleTransaction)
                                 {
-                                    actionBlock.Post(kv);
+                                    PersistBatch(context, _flushingInMemoryWriteCache);
+                                } else
+                                {
+                                    var actionBlock = new ActionBlockSlim<KeyValuePair<ShortHash, ContentLocationEntry>>(_configuration.CacheFlushDegreeOfParallelism, kv => {
+                                        // Do not lock on GetLock here, as it will cause a deadlock with
+                                        // SetMachineExistenceAndUpdateDatabase. It is correct not do take any locks as well,
+                                        // because there no Store can happen while flush is running.
+                                        Persist(context, kv.Key, kv.Value);
+                                    });
+
+                                    foreach (var kv in _flushingInMemoryWriteCache)
+                                    {
+                                        actionBlock.Post(kv);
+                                    }
+
+                                    actionBlock.Complete();
+                                    actionBlock.CompletionAsync().Wait();
                                 }
 
-                                actionBlock.Complete();
-                                actionBlock.CompletionAsync().Wait();
+                                Interlocked.Exchange(ref _flushingInMemoryWriteCache, new ConcurrentBigMap<ShortHash, ContentLocationEntry>());
                             }
-
-                            Interlocked.Exchange(ref _flushingInMemoryWriteCache, new ConcurrentBigMap<ShortHash, ContentLocationEntry>());
                         }
 
                         return BoolResult.Success;

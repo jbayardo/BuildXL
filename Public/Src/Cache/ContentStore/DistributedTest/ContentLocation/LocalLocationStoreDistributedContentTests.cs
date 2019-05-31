@@ -2049,7 +2049,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return true;
         }
 
-        [Fact(Skip="Made to be run manually")]
+        [Fact]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnNewEntries()
         {
             bool useIncrementalCheckpointing = true;
@@ -2090,6 +2090,7 @@ namespace ContentStoreTest.Distributed.Sessions
                     var sessions = context.Sessions;
                     Warmup(maximumBatchSize, warmupBatches, memoryContentLocationEventStore);
                     context.GetMaster().LocalLocationStore.Database.FlushIfEnabled(context);
+                    PrintCacheStatistics(context);
 
                     {
                         var stopWatch = new Stopwatch();
@@ -2116,6 +2117,7 @@ namespace ContentStoreTest.Distributed.Sessions
                         Output.WriteLine("[Benchmark] Total Time: " + ts);
                     }
 
+                    PrintCacheStatistics(context);
                     await Task.Delay(5000);
                 });
         }
@@ -2178,7 +2180,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return events;
         }
 
-        [Fact(Skip = "Made to be run manually")]
+        [Fact]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnMixedAddAndDelete()
         {
             bool useIncrementalCheckpointing = true;
@@ -2219,6 +2221,7 @@ namespace ContentStoreTest.Distributed.Sessions
                     var sessions = context.Sessions;
                     Warmup(maximumBatchSize, warmupBatches, memoryContentLocationEventStore);
                     context.GetMaster().LocalLocationStore.Database.FlushIfEnabled(context);
+                    PrintCacheStatistics(context);
 
                     {
                         var stopWatch = new Stopwatch();
@@ -2243,6 +2246,8 @@ namespace ContentStoreTest.Distributed.Sessions
                             ts.Hours, ts.Minutes, ts.Seconds,
                             ts.Milliseconds / 10);
                         Output.WriteLine("[Benchmark] Total Time: " + ts);
+
+                        PrintCacheStatistics(context);
                     }
 
                     await Task.Delay(5000);
@@ -2331,7 +2336,7 @@ namespace ContentStoreTest.Distributed.Sessions
             int warmupBatches = 10000;
             int numberOfMachines = 100;
             int operationsPerMachine = 25000;
-            float cacheHitRatio = 0.9f;
+            float cacheHitRatio = 0.5f;
             int maximumBatchSize = 1000;
 
             var centralStoreConfiguration = new LocalDiskCentralStoreConfiguration(TestRootDirectoryPath / "centralstore", Guid.NewGuid().ToString());

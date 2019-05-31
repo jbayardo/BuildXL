@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BuildXL.Cache.ContentStore.Distributed.Tracing;
@@ -452,6 +453,20 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
             {
                 SaveToDb(context, hash, entry);
             }
+        }
+
+        /// <inheritdoc />
+        protected override void PersistBatch(OperationContext context, IEnumerable<KeyValuePair<ShortHash, ContentLocationEntry>> pairs)
+        {
+            _keyValueStore.Use((store, state) => PersistBatchHelper(store, state.pairs, state.db), (pairs, db: this)).ThrowOnError();
+        }
+
+        private static Unit PersistBatchHelper(IBuildXLKeyValueStore store, IEnumerable<KeyValuePair<ShortHash, ContentLocationEntry>> pairs, RocksDbContentLocationDatabase db)
+        {
+            store.ApplyBatch(
+                pairs.Select(pair => db.GetKey(pair.Key)),
+                pairs.Select(pair => pair.Value != null ? db.Serialize(pair.Value) : null));
+            return Unit.Void;
         }
 
         private void SaveToDb(OperationContext context, ShortHash hash, ContentLocationEntry entry)

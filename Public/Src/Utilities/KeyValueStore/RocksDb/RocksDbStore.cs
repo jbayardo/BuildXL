@@ -324,11 +324,47 @@ namespace BuildXL.Engine.Cache.KeyValueStores
 
                 using (var writeBatch = new WriteBatch())
                 {
-                    writeBatch.Put(key, (uint)key.Length, value, (uint)value.Length, columnFamilyInfo.Handle);
+                    AddPutOperation(writeBatch, columnFamilyInfo, key, value);
+                    WriteInternal(writeBatch);
+                }
+            }
 
-                    if (columnFamilyInfo.UseKeyTracking)
+            /// <summary>
+            /// Adds a put operation for a key to a <see cref="WriteBatch"/>. These are not written
+            /// to the store by this function, just added to the <see cref="WriteBatch"/>.
+            /// </summary>
+            private static void AddPutOperation(WriteBatch writeBatch, ColumnFamilyInfo columnFamilyInfo, byte[] key, byte[] value)
+            {
+                writeBatch.Put(key, (uint)key.Length, value, (uint)value.Length, columnFamilyInfo.Handle);
+
+                if (columnFamilyInfo.UseKeyTracking)
+                {
+                    writeBatch.Put(key, s_emptyValue, columnFamilyInfo.KeyHandle);
+                }
+            }
+
+            /// <inheritdoc />
+            public void ApplyBatch(IEnumerable<string> keys, IEnumerable<string> values, string columnFamilyName = null)
+            {
+                ApplyBatch(keys.Select(k => StringToBytes(k)), values.Select(v => StringToBytes(v)), columnFamilyName);
+            }
+
+            /// <inheritdoc />
+            public void ApplyBatch(IEnumerable<byte[]> keys, IEnumerable<byte[]> values, string columnFamilyName = null)
+            {
+                var columnFamilyInfo = GetColumnFamilyInfo(columnFamilyName);
+
+                using (var writeBatch = new WriteBatch())
+                {
+                    foreach (var keyValuePair in keys.Zip(values, (k, v) => (k, v)))
                     {
-                        writeBatch.Put(key, s_emptyValue, columnFamilyInfo.KeyHandle);
+                        if (keyValuePair.v == null)
+                        {
+                            AddDeleteOperation(writeBatch, columnFamilyInfo, keyValuePair.k);
+                        } else
+                        {
+                            AddPutOperation(writeBatch, columnFamilyInfo, keyValuePair.k, keyValuePair.v);
+                        }
                     }
 
                     WriteInternal(writeBatch);
