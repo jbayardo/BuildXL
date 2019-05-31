@@ -32,7 +32,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// When activated, the requests effectively sent to the database will be initally done in memory and later on
         /// flushed to the underlying store.
         /// </summary>
-        public bool CacheEnabled { get; set; } = true;
+        public bool CacheEnabled { get; set; } = false;
 
         /// <summary>
         /// The maximum number of updates that we are willing to perform in memory before flushing.
@@ -55,6 +55,13 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// </summary>
         public int CacheFlushDegreeOfParallelism { get; set; } = Environment.ProcessorCount;
 
+        /// <summary>
+        /// Whether to use a single transaction to the underlying store when flushing instead of one transaction per
+        /// change.
+        ///
+        /// Only effective when <see cref="CacheEnabled"/> is activated. When this setting is on, there is no
+        /// parallelism done, regardless of <see cref="CacheFlushDegreeOfParallelism"/>.
+        /// </summary>
         public bool CacheFlushSingleTransaction { get; set; } = true;
     }
 

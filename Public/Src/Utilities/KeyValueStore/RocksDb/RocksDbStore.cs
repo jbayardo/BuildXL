@@ -153,8 +153,6 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                 m_defaults.DbOptions = new DbOptions()
                     .SetCreateIfMissing(true)
                     .SetCreateMissingColumnFamilies(true)
-                    // Since we are caching hashes, our usage is mostly random, and we should let the OS know that
-                    .SetAdviseRandomOnOpen(true)
                     // The background compaction threads run in low priority, so they should not hamper the rest of
                     // the system. The number of cores in the system is what we want here according to official docs,
                     // and we are setting this to the number of logical processors, which may be higher.
@@ -164,11 +162,10 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                     // Ensure we have performance statistics for profiling
                     .EnableStatistics();
 
-                //.SetAllowMmapReads(true)
-                //.SetAllowMmapWrites(true)
-
-                // The following option disables caching, and that totally screws performance for a mixed r/w workload
-                // .SetUseDirectReads(true)
+                // A small comment on things tested that did not work:
+                //  * SetAllowMmapReads(true) and SetAllowMmapWrites(true) produce a dramatic performance drop
+                //  * SetUseDirectReads(true) disables the OS cache, and although that's good for random point lookups,
+                //    it produces a dramatic performance drop otherwise.
 
                 m_defaults.WriteOptions = new WriteOptions()
                     // Disable the write ahead log to reduce disk IO. The write ahead log
@@ -184,13 +181,20 @@ namespace BuildXL.Engine.Cache.KeyValueStores
                     .SetSync(false);
 
 
-                var bbto = new BlockBasedTableOptions()
+                var blockBasedTableOptions = new BlockBasedTableOptions()
+                    // Use a bloom filter to help reduce read amplification on point lookups. 10 bits per key yields a
+                    // ~1% false positive rate as per the RocksDB documentation. This builds one filter per SST, which
+                    // means its optimized for not having a key.
                     .SetFilterPolicy(BloomFilterPolicy.Create(10, false))
+                    // Use a hash index in SST files to speed up point lookup.
                     .SetIndexType(BlockBasedTableIndexType.HashSearch)
-                    .SetWholeKeyFiltering(false);
+                    // Whether to use the whole key or a prefix of it (obtained through the prefix extractor below).
+                    // Since the prefix extractor is a no-op, better performance is achieved by turning this off (i.e.
+                    // setting it to true).
+                    .SetWholeKeyFiltering(true);
 
                 m_defaults.ColumnFamilyOptions = new ColumnFamilyOptions()
-                    .SetBlockBasedTableFactory(bbto)
+                    .SetBlockBasedTableFactory(blockBasedTableOptions)
                     .SetPrefixExtractor(SliceTransform.CreateNoOp());
 
                 m_columns = new Dictionary<string, ColumnFamilyInfo>();

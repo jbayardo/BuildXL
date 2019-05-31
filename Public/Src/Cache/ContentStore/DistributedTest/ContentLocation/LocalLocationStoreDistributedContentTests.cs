@@ -2049,7 +2049,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return true;
         }
 
-        [Fact]
+        [Fact(Skip = "For manual usage only")]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnNewEntries()
         {
             bool useIncrementalCheckpointing = true;
@@ -2122,9 +2122,6 @@ namespace ContentStoreTest.Distributed.Sessions
                 });
         }
 
-        /// <summary>
-        /// Warms up an event hub by sending it remove events for non-existent entries. As they don't exist, no changes should be observed.
-        /// </summary>
         private void Warmup(int maximumBatchSize, int warmupBatches, MemoryContentLocationEventStoreConfiguration memoryContentLocationEventStore)
         {
             Output.WriteLine("[Warmup] Starting");
@@ -2148,10 +2145,6 @@ namespace ContentStoreTest.Distributed.Sessions
             Output.WriteLine("[Warmup] Total Time: " + ts);
         }
 
-        /// <summary>
-        /// Warning: be careful with the memory usage. Since event generation happens before benchmarking and is
-        /// stored in memory, generating a lot of data will spike your memory usage quickly
-        /// </summary>
         private static List<List<ContentLocationEventData>> GenerateAddEvents(int numberOfMachines, int addsPerMachine, int maximumBatchSize)
         {
             var randomSeed = Environment.TickCount;
@@ -2180,7 +2173,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return events;
         }
 
-        [Fact]
+        [Fact(Skip = "For manual usage only")]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnMixedAddAndDelete()
         {
             bool useIncrementalCheckpointing = true;
@@ -2329,7 +2322,7 @@ namespace ContentStoreTest.Distributed.Sessions
             return events;
         }
 
-        [Fact]
+        [Fact(Skip = "For manual usage only")]
         public async Task MultiThreadedStressTestRocksDbContentLocationDatabaseOnUniqueAddsWithCacheHit()
         {
             bool useIncrementalCheckpointing = true;
@@ -2411,16 +2404,15 @@ namespace ContentStoreTest.Distributed.Sessions
 
             if (db.IsInMemoryCacheEnabled)
             {
-                Output.WriteLine("CACHE IS BEING USED");
-            } else
+                Output.WriteLine("CACHE ENABLED");
+            }
+            else
             {
-                Output.WriteLine("NO CACHE");
+                Output.WriteLine("CACHE DISABLED");
             }
 
             Output.WriteLine("[Statistics] TotalNumberOfCacheHit: " + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].ToString());
             Output.WriteLine("[Statistics] TotalNumberOfCacheMiss: " + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheMiss].ToString());
-
-            var hitRate = counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Value / (counters[ContentLocationDatabaseCounters.TotalNumberOfCacheHit].Value + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheMiss].Value + 1);
             Output.WriteLine("[Statistics] CacheFlush: " + counters[ContentLocationDatabaseCounters.CacheFlush].ToString());
             Output.WriteLine("[Statistics] TotalNumberOfCacheFlushes: " + counters[ContentLocationDatabaseCounters.TotalNumberOfCacheFlushes].ToString());
             Output.WriteLine("[Statistics] NumberOfCacheFlushesTriggeredByUpdates: " + counters[ContentLocationDatabaseCounters.NumberOfCacheFlushesTriggeredByUpdates].ToString());

@@ -64,7 +64,7 @@ namespace ContentStoreTest.Test
             var logTypes = configuration.Types ?? new[] {"RollingMemory", "Console"};
 
             // Override console log severity from config or use default.
-            var consoleSeverity = Severity.Warning;
+            var consoleSeverity = Severity.Debug;
             if (configuration.ConsoleSeverity != null)
             {
                 Enum.TryParse(configuration.ConsoleSeverity, true, out consoleSeverity);

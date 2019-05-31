@@ -2,7 +2,6 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.ContractsLight;
 using System.Linq;
@@ -19,7 +18,6 @@ using BuildXL.Utilities;
 using BuildXL.Utilities.Collections;
 using BuildXL.Utilities.ParallelAlgorithms;
 using BuildXL.Utilities.Tasks;
-using BuildXL.Utilities.Threading;
 using BuildXL.Utilities.Tracing;
 using static BuildXL.Cache.ContentStore.Distributed.Tracing.TracingStructuredExtensions;
 using AbsolutePath = BuildXL.Cache.ContentStore.Interfaces.FileSystem.AbsolutePath;
@@ -60,8 +58,11 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         private ConcurrentBigMap<ShortHash, ContentLocationEntry> _flushingInMemoryWriteCache = new ConcurrentBigMap<ShortHash, ContentLocationEntry>();
         private readonly object _cacheFlushLock = new object();
 
-        public bool IsInMemoryCacheEnabled => _isInMemoryCacheEnabled;
-        private bool _isInMemoryCacheEnabled = false;
+        /// <summary>
+        /// Whether the cache is currently being used. Can only possibly be true in master. Only meant for testing
+        /// purposes.
+        /// </summary>
+        internal bool IsInMemoryCacheEnabled { get; private set; } = false;
 
         /// <summary>
         /// This counter is not exact, but provides an approximate count. It may be thwarted by flushes and cache
@@ -140,7 +141,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
                 lock (_cacheFlushTimerLock)
                 {
-                    _isInMemoryCacheEnabled = isDatabaseWritable;
+                    IsInMemoryCacheEnabled = isDatabaseWritable;
                 }
 
                 ResetFlushTimer();
@@ -151,7 +152,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         {
             lock (_cacheFlushTimerLock)
             {
-                var cacheFlushTimeSpan = _isInMemoryCacheEnabled
+                var cacheFlushTimeSpan = IsInMemoryCacheEnabled
                     ? _configuration.CacheFlushingMaximumInterval
                     : Timeout.InfiniteTimeSpan;
 
@@ -462,7 +463,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         protected bool TryGetEntryCore(OperationContext context, ShortHash hash, out ContentLocationEntry entry)
         {
-            if (_isInMemoryCacheEnabled)
+            if (IsInMemoryCacheEnabled)
             {
                 // The entry could be a tombstone, so we need to make sure the user knows content has actually been
                 // deleted, which is why we check for null.
@@ -497,7 +498,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
         /// <nodoc />
         protected void Store(OperationContext context, ShortHash hash, ContentLocationEntry entry)
         {
-            if (_isInMemoryCacheEnabled)
+            if (IsInMemoryCacheEnabled)
             {
                 _inMemoryWriteCache[hash] = entry;
 
@@ -522,7 +523,7 @@ namespace BuildXL.Cache.ContentStore.Distributed.NuCache
 
         internal void FlushIfEnabled(OperationContext context)
         {
-            if (!_isInMemoryCacheEnabled)
+            if (!IsInMemoryCacheEnabled)
             {
                 return;
             }
