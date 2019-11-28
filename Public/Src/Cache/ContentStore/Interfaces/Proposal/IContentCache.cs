@@ -33,7 +33,7 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
         #endregion
 
 
-        #region Files
+        #region Insert
         Task<InsertResult> InsertFileAsync(
             Context context,
             InsertFileRequest request,
@@ -44,19 +44,6 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
             IReadOnlyList<InsertFileRequest> requests,
             CancellationToken cancellationToken = default);
 
-        Task<RetrieveFileResult> RetrieveFileAsync(
-            Context context,
-            RetrieveFileRequest request,
-            CancellationToken cancellationToken = default);
-
-        Task<IEnumerable<Task<Indexed<RetrieveFileResult>>>> BulkRetrieveFileAsync(
-            Context context,
-            IReadOnlyList<RetrieveFileRequest> requests,
-            CancellationToken cancellationToken = default);
-        #endregion
-
-
-        #region Streams
         Task<InsertResult> InsertStreamAsync(
             Context context,
             InsertStreamRequest request,
@@ -65,6 +52,19 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
         Task<IEnumerable<Task<Indexed<InsertResult>>>> BulkInsertStreamAsync(
             Context context,
             IReadOnlyList<InsertStreamRequest> requests,
+            CancellationToken cancellationToken = default);
+        #endregion
+
+
+        #region Retrieve
+        Task<RetrieveFileResult> RetrieveFileAsync(
+            Context context,
+            RetrieveFileRequest request,
+            CancellationToken cancellationToken = default);
+
+        Task<IEnumerable<Task<Indexed<RetrieveFileResult>>>> BulkRetrieveFileAsync(
+            Context context,
+            IReadOnlyList<RetrieveFileRequest> requests,
             CancellationToken cancellationToken = default);
 
         Task<RetrieveStreamResult> RetrieveStreamAsync(
@@ -78,6 +78,18 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
             CancellationToken cancellationToken = default);
         #endregion
 
+        #region Delete
+        Task<DeleteResult> DeleteAsync(
+            Context context,
+            DeleteRequest request,
+            CancellationToken cancellationToken = default);
+
+        Task<IEnumerable<Task<Indexed<RetrieveStreamResult>>>> BulkDeleteAsync(
+            Context context,
+            IReadOnlyList<DeleteRequest> requests,
+            CancellationToken cancellationToken = default);
+        #endregion
+
         #region Pinning
         Task<CreatePinResult> CreatePinAsync(
             Context context,
@@ -88,6 +100,10 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
             Context context,
             ReleasePinRequest request,
             CancellationToken cancellationToken = default);
+        #endregion
+
+        #region Other
+        Task<GetStatsResult> GetStatsAsync(Context context);
         #endregion
     }
 }

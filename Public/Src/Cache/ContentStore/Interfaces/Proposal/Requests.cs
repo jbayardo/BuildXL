@@ -63,13 +63,15 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
 
         public AbsolutePath Path { get; }
 
+        public ContentHash? ExpectedHash { get; set; } = null;
+
         public InsertFileOptions? Options { get; set; } = null;
 
-        public InsertFileRequest(HashType hashType, AbsolutePath path, InsertFileOptions? options = null)
+        public InsertFileRequest(HashType hashType, AbsolutePath path, ContentHash? expectedHash = null, InsertFileOptions? options = null)
         {
             HashType = hashType;
             Path = path;
-            Options = options;
+            ExpectedHash = expectedHash;
             Options = options;
         }
     }
@@ -80,13 +82,26 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
 
         public Stream Stream { get; }
 
+        public ContentHash? ExpectedHash { get; set; } = null;
+
         public InsertStreamOptions? Options { get; set; } = null;
 
-        public InsertStreamRequest(HashType hashType, Stream stream, InsertStreamOptions? options = null)
+        public InsertStreamRequest(HashType hashType, Stream stream, ContentHash? expectedHash = null, InsertStreamOptions? options = null)
         {
             HashType = hashType;
             Stream = stream;
+            ExpectedHash = expectedHash;
             Options = options;
+        }
+    }
+
+    public class DeleteRequest
+    {
+        public ContentHash ContentHash { get; }
+
+        public DeleteRequest(ContentHash contentHash)
+        {
+            ContentHash = contentHash;
         }
     }
 

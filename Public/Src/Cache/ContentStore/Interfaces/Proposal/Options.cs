@@ -72,17 +72,11 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
 
     public class InsertStreamOptions : CommonOptions
     {
-        public ContentHash? ExpectedHash { get; set; } = null;
     }
 
     public class InsertFileOptions : CommonOptions
     {
-        /// <summary>
-        /// Content ingress method allowed by caller.
-        /// </summary>
         public FileRealizationMode RealizationMode { get; set; } = FileRealizationMode.Any;
-
-        public ContentHash? ExpectedHash { get; set;  } = null;
     }
 
     public class RetrieveStreamOptions : CommonOptions
