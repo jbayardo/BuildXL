@@ -7,14 +7,14 @@ using BuildXL.Cache.ContentStore.Interfaces.Tracing;
 
 namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
 {
-    public sealed class ScopedPin : IDisposable
+    public sealed class LexicallyScopedPin : IDisposable
     {
         private readonly Context _context;
         private readonly IContentCache _cache;
 
         public Pin Pin { get; }
 
-        public ScopedPin(Context context, IContentCache cache, Pin pin)
+        public LexicallyScopedPin(Context context, IContentCache cache, Pin pin)
         {
             _context = context;
             _cache = cache;
@@ -29,12 +29,12 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
 
     public static partial class PinExtensions
     {
-        public static async Task<ScopedPin> CreateScopedPinAsync(this IContentCache cache, Context context, CreatePinRequest? request = null, CancellationToken cancellationToken = default)
+        public static async Task<LexicallyScopedPin> CreateLexicalPinAsync(this IContentCache cache, Context context, CreatePinRequest? request = null, CancellationToken cancellationToken = default)
         {
             request ??= new CreatePinRequest();
             var result = await cache.CreatePinAsync(context, request, cancellationToken);
             Contract.Assert(result.Succeeded);
-            return new ScopedPin(context, cache, result.Pin);
+            return new LexicallyScopedPin(context, cache, result.Pin);
         }
     }
 }

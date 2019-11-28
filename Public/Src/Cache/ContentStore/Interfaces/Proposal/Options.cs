@@ -29,28 +29,28 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
         }
     }
 
+    public enum WorkHint
+    {
+        /// <summary>
+        /// All necessary work happens within the returned task.
+        /// </summary>
+        Inlined = 0,
+
+        /// <summary>
+        /// Minimal amount of work possible to guarantee the operations' success or failure, and leaves the rest
+        /// running in the background.
+        /// </summary>
+        Minimal = 1,
+    }
+
     public class CommonOptions
     {
-        public enum WorkHint
-        {
-            /// <summary>
-            /// All necessary work happens within the returned task.
-            /// </summary>
-            Inlined = 0,
-
-            /// <summary>
-            /// Minimal amount of work possible to guarantee the operations' success or failure, and leave the rest
-            /// running in the background
-            /// </summary>
-            Minimal = 1,
-        }
-
         /// <summary>
         /// Each operation triggers many internal book keeping tasks. These tasks are needed to ensure eventual
         /// consistency of the cache. This option allows you to have those tasks happen in the background instead of
         /// inlined in the operation's task.
         /// </summary>
-        public WorkHint Work { get; set; } = WorkHint.Inlined;
+        public WorkHint WorkHint { get; set; } = WorkHint.Inlined;
 
         /// <summary>
         /// Whether this operation should update the last access time of the content

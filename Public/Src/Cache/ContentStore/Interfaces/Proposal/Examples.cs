@@ -12,7 +12,7 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
         public async Task ExampleOneAsync(Context context, AbsolutePath filePath)
         {
             // This would be created at the beginning of the "session", and all further pins would use it
-            using var scope = await Cache.CreateScopedPinAsync(context);
+            using var scope = await Cache.CreateLexicalPinAsync(context);
 
             var options = new InsertFileOptions()
             {
