@@ -7,7 +7,7 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
 {
     public class Examples
     {
-        public IContentCache Cache { get; } = null;
+        public IContentCacheA1 Cache { get; } = null;
 
         public async Task ExampleOneAsync(Context context, AbsolutePath filePath)
         {
@@ -19,7 +19,7 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
                 Pin = new PinOptions(scope.Pin)
             };
 
-            var result = await Cache.InsertFileAsync(context, new InsertFileRequest(Hashing.HashType.Vso0, filePath, options));
+            var result = await Cache.InsertFileAsync(context, new InsertFileRequest(Hashing.HashType.Vso0, filePath, options: options));
         }
     }
 }

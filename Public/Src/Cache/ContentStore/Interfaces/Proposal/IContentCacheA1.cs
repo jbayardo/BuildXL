@@ -18,7 +18,7 @@ namespace BuildXL.Cache.ContentStore.Interfaces.Proposal
     using RetrieveFileResult = PlaceFileResult;
     using InsertResult = PutResult;
 
-    public interface IContentCache : IName, IStartupShutdown
+    public interface IContentCacheA1 : IName, IStartupShutdown
     {
         #region Lookup
         Task<LookupResult> LookupAsync(
